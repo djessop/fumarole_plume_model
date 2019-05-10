@@ -7,23 +7,17 @@ A set of utilities to analyse wind affected (bent) plumes
 
 Provided functions:
 -------------------
-- centroidPosn
 - plumeTrajectory
     Locate the "centre of mass" and spread of a plume.
-- gaussian_profile
+- rotatedPlumeSection
+    Takes a part of the experimental image, and rotates it by a given angle.
 - openPlotExptImage
     [No documentation currently available]
 - distAlongPath
     Calculates the cumulative distance along the plume axis.
 - plumeAngle
     Calculates the plume angle at each point along its axis.
-- initialGuessAtAxis
-- rotateImage
-    Takes the experimental image, and rotates it by a given angle.
-- trueLocationWidth
-- pathFromSmoothedTheta
 """
-
 from scipy.io.matlab import loadmat
 from scipy.interpolate import interp1d, splrep, splev
 from scipy.optimize import curve_fit
@@ -105,12 +99,19 @@ def plumeTrajectory(image, n=2):
         if any(row):
             xbar.append(centroidPosn(x, row))
             zbar.append(pos)
+            # try:
+                # popt, pcov = curve_fit(gaussian_profile, x, row, p0)
+                # xbar.append(popt[1])
+                # xsig.append(popt[2])        
+                # zbar.append(pos)
             if len(xbar) > 1:
                 dx = np.abs(xbar[-1] - xbar[-2])
                 dz = np.abs(zbar[-1] - zbar[-2])
                 theta = np.arctan(np.divide(dz, dx))
             if theta < np.pi / 3: # 60 degrees...
                 break
+            # except RuntimeError:
+            #     break
             
     # Split the plume image into what remains beyond the break point of the
     # previous loop.
@@ -125,6 +126,13 @@ def plumeTrajectory(image, n=2):
             # Calculate weighted mean and std dev over the col
             xbar.append(pos + x0)
             zbar.append(centroidPosn(z, col))
+            # zsig.append(np.sqrt(((z - zbar[-1])**2 * col).sum() / col.sum()))
+            # try:
+            #     popt, pcov = curve_fit(gaussian_profile, z, col, p0)
+            #     xbar.append(pos + x0)
+            #     zbar.append(popt[1])
+            # except RuntimeError:
+            #     break
     xbar = np.array(xbar)
     zbar = np.array(zbar)
     x0 = (xbar[0], zbar[0])
@@ -198,7 +206,7 @@ def distAlongPath(x, y):
     # a well-defined origin
     s0 = np.sqrt(x[0]**2 + y[0]**2)
     # Add the first point to the cumulative sum of the differences
-    return s0 + np.append(0, np.sqrt(dx**2 + dy**2).cumsum()) 
+    return np.append(0, np.sqrt(dx**2 + dy**2).cumsum()) + s0
 
 
 def plumeAngle(x, y, errors=None):
@@ -226,19 +234,19 @@ def plumeAngle(x, y, errors=None):
     --------
     numpy.arctan2
     """
-    # Basic functionality: calculate only angle
     try:
-        dy    = np.gradient(y, edge_order=2)
-        dx    = np.gradient(x, edge_order=2)
+        # Basic functionality: calculate only angle
+        dy = np.gradient(y, edge_order=2)
+        dx = np.gradient(x, edge_order=2)
         theta = np.arctan2(dy, dx)
     except ValueError:
         theta = None
 
-    # Advanced functionality: calculate measurement error
     if errors is not None:
+        # Advanced functionality: calculate measurement error
         denom = dx**2 + dy**2
-        dfdx  = - dy / denom
-        dfdy  =   dx / denom
+        dfdx = - dy / denom
+        dfdy =   dx / denom
         sig_theta = np.sqrt((dfdx * errors[0])**2 + (dfdy * errors[1])**2)
         return theta, sig_theta
     else:    
@@ -249,13 +257,14 @@ def initialGuessAtAxis(N=50, p=None):
     """
     Get a maximum of N points from the current image
     """
-    # If no input for p is given (i.e. p is None), then initialise p
-    if p is None: 
+    # If no input for p is given (i.e. p is None), p is an empty list, or p is an empty array,
+    # or any entry in p is None, then initialise p
+    if (p is None): #or (type(p) is list and p == []) or (type(p) is np.ndarray and p.size == 0) or if any(p == None):
         print('Click on the points that will form the initial guess')
         p = np.array(plt.ginput(N))        
-        return p  #np.append([0, 0], p).reshape(len(p)+1, 2)
+        return p #np.append([0, 0], p).reshape(len(p)+1, 2)
     else:
-        return p  # Null function!
+        return p
 
 
 def rotateImage(img, angle, pivot):
@@ -281,9 +290,9 @@ def rotateImage(img, angle, pivot):
 
     padX = [img.shape[1] - pivot[0], pivot[0]]
     padY = [img.shape[0] - pivot[1], pivot[1]]
-    imgP = np.pad(img, [padY, padX], 'constant')
-    imgR = rotate(imgP, angle, resize=False)
-    
+    imgP = np.pad(img, [padY, padX], 'edge')
+    imgR = rotate(imgP, angle, resize=False, mode='edge') #, cval=imgP.min())
+
     return imgR
 
 
@@ -305,19 +314,20 @@ def trueLocationWidth(p, data, errors=None, plotting=False):
         The "true" location of the plume centroid
     plumeWidth : 1D array like
         The width at location trueLocn[i] and angle theta[i]
-    sig_trueLocn : 
-    sig_b : 
 
     See also
     --------
     plumeAngle
     '''
+
+#print(np.stack((p[:,0], p[:,1], theta)).T)
     if p is not None:
         p = initialGuessAtAxis(p=p)
     else:
         p = initialGuessAtAxis()
 
     _s = distAlongPath(p[:,0], p[:,1])
+
     
     # Iterate through the selected points, rotating the image through 
     # the estimated angle and calculating the true location of the midpoint
@@ -328,6 +338,7 @@ def trueLocationWidth(p, data, errors=None, plotting=False):
     r2 = 0.
 
     if plotting:
+        # fig1, axes1 = plt.subplots(1, 2)
         fig1 = plt.figure()
         ax00 = fig1.add_axes([.05,       .35, .4,        .6])
         ax01 = fig1.add_axes([.61724047, .35, .26551907, .6])
@@ -344,7 +355,7 @@ def trueLocationWidth(p, data, errors=None, plotting=False):
     # Loop through the locations in p, rotating the image as required and
     # obtaining the maximum intensity and the half width of the plume
     # "section" at each location from a Gaussian fit.
-    theta, sig_theta = plumeAngle(p[:,0], p[:,1], errors=errors*2)
+    theta, sig_theta = plumeAngle(p[:,0], p[:,1], errors=[1/scaleFactor]*2)
     # Get angles in degrees and in the correct quadrant
     theta = 90. + theta * 180 / np.pi
     # Lists for the variance of b and d (from covariance matrix)
@@ -360,7 +371,8 @@ def trueLocationWidth(p, data, errors=None, plotting=False):
         # about the current location.  Section is the sum over these rows.
         row = imR[np.uint16(M/2)-vWindowOffset:np.uint16(M/2)+vWindowOffset, :]
         row = row.sum(axis=0)
-        row[np.uint16(N/2)+hWindowOffset:] = 0.
+        #row[np.uint16(N/2)+hWindowOffset:] = 0.
+        row -= row[0]
 
         # Fit a Gaussian to the data and use this to define plume parameters
         X = np.arange(len(row))
@@ -383,39 +395,41 @@ def trueLocationWidth(p, data, errors=None, plotting=False):
                         np.multiply(d[-1], [-np.cos(th),np.sin(th)]))
 
         # ----------------------------------------------------------------- #
-        # Remainder of this function is dedicated to plotting solutions.
-        # Boolean "plotting" switches this functionality on or off.
+        # The remainder of this function is dedicated to plotting the
+        # solutions.  Should probably incorporate a boolean handle that turns
+        # this functionality on or off.
         # ----------------------------------------------------------------- #
         if plotting:
             # Plot the solution for visualisation purposes.
             # Update "true locations" on the base image
             ax00.plot(trueLocn[-1][0], trueLocn[-1][1], 'c+', ms=8, lw=3)
             
-            # Rotate image to show where current section is being calculated
+            # Rotate the image to show where current section is being calculated
             ax01.imshow(imR)
             ax01.axvline(N/2)
             ax01.axvline(N/2 - hWindowOffset, ls='--')
             ax01.axvline(N/2 + hWindowOffset, ls='--')
             ax01.axhline(M/2)
             
-            # Plot residual as a function of distance along plume axis
+            # Plot the residual as a function of distance along plume axis
             ax10.plot(s, d[-1], '+', c='C0')
             ax10.set_title('$r^2$: %.4f' % r2)
             
-            # Plot section for current rotation
+            # Plot the section for the current rotation
             ax11.clear()
             ax11.plot(X, row, '-', c='C0', label='data')
             ax11.plot(X, gaussian_profile(X, *popt), 'r-', label='gaussian')
-            ax11.axvline(COM,  c='r',  ls='--', lw=2, zorder=1)
-            ax11.axvline(N/2,  c='C0', ls='-',  zorder=0)
+            ax11.axvline(COM, c='r', ls='--', lw=2, zorder=1)
+            ax11.axvline(N/2, c='C0', ls='-', zorder=0)
             ax11.axvline(N/2 - hWindowOffset, c='C0', ls='--', zorder=0)
             ax11.axvline(N/2 + hWindowOffset, c='C0', ls='--', zorder=0)
-            plt.pause(.1)  # Pause for a crude animation
+            plt.pause(.5)  # Pause for a crude animation
+        #plt.close()
 
     # Convert lists to numpy arrays for ease of manipulation
     var_b = np.array(var_b)
     var_d = np.array(var_d)
-    d     = np.array(d)
+    d = np.array(d)
     if errors is not None:
         sig_trueLocn = np.sqrt(2 * errors[0]**2 + var_d + d**2 * sig_theta)
         return (np.array(trueLocn), np.abs(np.array(plumeWidth)),
@@ -440,30 +454,32 @@ def pathFromSmoothedTheta(s, theta, snew, smoothing=0.):
     
 
 if __name__ == '__main__':
-    plt.close('all')    
+    plt.close('all')    # Clear pre-existing plots
 
     # Set a path variable according to which experiment is required
-    exptNo = 3
-    path   = './data/ExpPlumes_for_Dai/exp%02d/' % exptNo
-    fname  = path + 'gsplume.mat'
-
+    #exptNo = 31
+    #path   = './data/ExpPlumes_for_Dai/exp%02d/' % exptNo
+    #fname  = path + 'gsplume.mat'
+    path = '/home/ovsg/Documents/Thermographie/done/tiff/2019/mu sigma/'
 
     # Initial guesses.  Either load from file or make a fresh guess
-    with open(path + 'exp%02d_initGuess.json' % exptNo) as f:
-        data = json.load(f)
-    p = np.array(data['data'])
+    #with open(path + 'exp%02d_initGuess.json' % exptNo) as f:
+    with open(path + '20190314_CSS_initGuess.json') as f:
+        jsondata = json.load(f)
+    p = np.array(jsondata['data'])
     
     fig, ax = plt.subplots()    
     try:
         axes = np.array([ax])
         ax, im, data, xexp, zexp, extent, (Ox, Oz) = openPlotExptImage(path,
-                                                                       axes,
-                                                                       exptNo)
+                                                                       axes),
+                                                                       #exptNo)
         leg  = ax.legend()
         leg.get_frame().set_facecolor('gray')                                   
     except TypeError:
         print('file %s doesn\'t seem to exist...skipping!' % fname)
 
+    #p       = initialGuessAtAxis()  # Comment out if loading from file
     pPixels = p.copy() * scaleFactor
     pPixels[:,0] += Ox
     pPixels[:,1] -= Oz
@@ -475,11 +491,14 @@ if __name__ == '__main__':
                                                  plotting=True)
 
     # Form the state variables that will be compared to model solution. 
-    p[:,0] = (p[:,0] - Ox) / scaleFactor
-    p[:,1] = (Oz - p[:,1]) / scaleFactor
+    #p[:,0] = (p[:,0] - Ox) / scaleFactor
+    #p[:,1] = (Oz - p[:,1]) / scaleFactor
     bexp     /= scaleFactor
     sig_bexp /= scaleFactor
     sig_p    /= scaleFactor
     sexp = distAlongPath(p[:,0], p[:,1])
     Vexp = np.array([bexp, thexp]).T
     sigV = np.array([sig_bexp, sig_thexp]).T
+
+    # fname  = './data/ExpPlumes_for_Dai/GCTA_plumeData.xlsx'
+    # writer = pandas.ExcelWriter(fname, engine='xlsxwriter') 
