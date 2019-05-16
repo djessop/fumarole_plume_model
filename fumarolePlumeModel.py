@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # coding=utf-8
 
-""" fumarolePlumeModel.py
+""" 
+fumarolePlumeModel.py
 
 Provides solutions to the model of Aubry et al (2017a)* which models the 
 variation of volume flux, q, momentum flux, m, buoyancy flux, f, and plume 
@@ -16,13 +17,6 @@ Provided functions:
     Wind at altitude, z.
 - objectiveFn
     Misfit function between the synthetic and "experimental" data.
-- gradient
-    Difference between the objective function for the current and test 
-    solutions divided by the step in source condition values.  
-- newConditions
-    new source condition values based on the gradient from the previous 
-    iteration via a Newton-Raphson process, i.e. 
-        V0 = V0old - objectiveFn / gradient
 
 Model description:
 ------------------
@@ -44,13 +38,13 @@ Note that \\theta is measured relative to the horizontal plane.
 Applying the Boussinesq approximation (density variations are small enough to 
 be negligible, except when a density term is multiplied by gravity) and upon 
 making the following substitutions:
-q = u r**2, m = u**2 r**2, f = g' u r**2,
+Q = u r**2, M = u**2 r**2, F = g' u r**2,
 we obtain
-dq/ds = 2 q/\\sqrt{m} (\\alpha_e\\abs{m/q - w\\cos\\theta} 
+dQ/ds = 2 Q/\\sqrt{M} (\\alpha_e\\abs{M/Q - w\\cos\\theta} 
 	+ \beta_e\\abs{w\\sin\\theta})
-dm/ds = fq/m\\sin\\theta + w\\cos\\theta dq/ds
-df/ds = -N**2 \\sqrt{m} \\sin\\theta
-d\theta/ds = fq/m**2\\cos\\theta - w/m\\sin\\theta dq/ds
+dM/ds = FQ/M\\sin\\theta + w\\cos\\theta dQ/ds
+dF/ds = -N**2 \\sqrt{M} \\sin\\theta
+d\theta/ds = FQ/M**2\\cos\\theta - w/M\\sin\\theta dQ/ds
 
 References:
 -----------
@@ -80,6 +74,8 @@ changes log:
 2018-06-25      Clipping model range to be equal to the experimental data
 2018-06-26      Introduced command line option to plot data.  
                 Introduced "main()" function to contain the bod
+2019-05-09      Rewriting objective function to allow scipy.optimize.fmin to 
+                call it
                 
 to do:
 ------
@@ -115,7 +111,7 @@ font = {'family' : 'serif',
 
 eps         = 1e-3
 scaleFactor = 38
-pathname    = '/home/david/Dropbox/articles/fumarolePlumeModel/data/'
+pathname    = '/home/david/Modelling/fumarolePlumeModel/data/'
 
 # PHYSICAL CONSTANTS
 g = 981                     # CGS
@@ -126,11 +122,11 @@ def derivs(s, V, p=(.09, .6, .1, 1., None)):
     Description of the forward model.  Returns the derivatives of the state 
     vector, V, for the Aubry et al., 2017 (GRL) wind-bent plume model.  
     V contains the following state variables:
-    q           volume flux (specific mass flux) = b**2 u
-    m           specific momentum flux = b**2 u**2
-    f           specific buoyancy flux = b**2 u g' 
-    :math: `\\theta'      local deflection of the plume axis with respect to vertical
-
+    Q           volume flux (specific mass flux) = b**2 u
+    M           specific momentum flux = b**2 u**2
+    F           specific buoyancy flux = b**2 u g' 
+    :math: `\\theta'      local deflection of the plume axis with respect to 
+        vertical
     
     Parameters
     ----------
@@ -190,8 +186,12 @@ def wind(s, V):
     """
 
     theta = V[3]
-    z = s * np.sin(theta)
-    return z * .01
+    # ds = np.diff(s)
+    # z = []
+    # for (ds_, theta_) in zip(ds, theta):
+    #     z.append(ds_ * np.sin(theta_))
+    # z = np.array(z)
+    return .01
 
 
 def objectiveFn(Vexp, Vsyn, cov=None, p=(.09, .6, .1, 1., None),
@@ -265,6 +265,101 @@ def objectiveFn(Vexp, Vsyn, cov=None, p=(.09, .6, .1, 1., None),
     # objFn /= DOF
 
     return np.exp(-objFn)
+
+
+def objectiveFn2(V0, derivs, p, sexp, dexp, sig_dexp=None, mode='lsq'):
+    """
+    Returns the objective (misfit/cost) function as the either (weighted) 
+    sum of square differences between the synthetic and "experimental" data, 
+    or the (weighted) absolute difference.
+    
+    Parameters
+    ----------
+    V0 : list or array_like
+        Current "guess" of the source conditions.
+    derivs : callable
+        function that describes the model.
+    p : tuple or array_like
+        model parameters.
+    sexp : list or array_like
+        independent variable (sexp) of experimental (or natural) data.
+    dexp : list or array_like
+        state vector of experimental (or natural) data consisting of width 
+        (bexp) and angle (thetaexp).
+    sig_dexp : list or array_like (optional)
+        covariance matrix of the experimental data for weighting.  
+    mode : str (optional)
+        switch for choosing the form of the objective function.  Choices 
+        are 'least-squares' (lsq) or 'absolute differences' (abs).  Default 
+        is 'lsq'.
+
+    Notes
+    -----
+    1)  The covariance matrix of data is assumed to be diagonal, though there 
+    will be a strong correlation between width and angle, for example.  Non 
+    (main) diagonal covariances can be dealt with by rewritting the code to 
+    allow for the covariance matrix to be explicitly passed to the function.
+    2)  The synthetic data is flattened ('ravelled') according to 'C' 
+    (row-major) format.  Thus care should be taken to flatten the natural data 
+    using the same format.
+
+    TO DO
+    -----
+    - Check for dimensional coherence
+    - Explicitly pass the covariance matrix
+
+    """
+    # Initialise integrator object, set intial conditions and model params.
+    r = ode(derivs).set_integrator('lsoda', nsteps=1e6)
+    r.set_initial_value(V0, 0).set_f_params(p)
+
+    # Domain of integration and integration step. 
+    # No need to go further than extent of the experimental plume
+    t1 = sexp.max()             
+    dt = .1
+    dsexp = np.diff(sexp)
+    s, Q, M, F, theta = [], [], [], [], []
+    s.append(0.)
+    Q.append(V0[0])
+    M.append(V0[1])
+    F.append(V0[2])
+    theta.append(V0[3])
+
+    # Solve the model for the current initial conditions
+    ind = 0
+    while r.successful() and r.t < t1:
+        dt = dsexp[ind]         # to get model output at expt. points
+        r.integrate(r.t + dt)
+        s.append(r.t)
+        Q_, M_, F_, theta_ = r.y
+        Q.append(Q_)
+        M.append(M_)
+        F.append(F_)
+        theta.append(theta_)
+        ind += 1
+    Q, M, F, theta = np.array(Q), np.array(M), np.array(F), np.array(theta)
+
+    # Convert plume flux parameters into basic params
+    b, u, gp = Q / np.sqrt(M), M / Q, F / Q
+
+    d   = np.array([b]).ravel(order='C')
+    res = dexp - d
+
+    # Kernel definition depends on mode
+    if mode == 'lsq':
+        if sig_dexp is None:
+            kernel = .5 * res.dot(res)
+        else:
+            # Build and invert covariance matrix
+            invCd = np.linalg.inv(np.diag(sig_dexp**2))  # Cov. is std**2
+            kernel = .5 * res @ invCd @ res
+    else:
+        if sig_dexp is None:
+            kernel = np.abs(res).sum()
+        else:
+            kernel = np.abs(res / sig_dexp).sum()
+
+    return -np.exp(-kernel)
 
 
 def loadICsParameters(pathname, run, alpha=None, beta=None, m=None):
@@ -386,8 +481,9 @@ if __name__ == '__main__':
     sig_bexp /= scaleFactor
 
     # Form initial conditions and model parameters from CGTA expt data
-    V0, p = loadICsParameters(pathname, run, alpha=.09, beta=.5, m=1.)
+    V0, p = loadICsParameters(pathname, run, alpha=.075, beta=.5, m=2.)
 
+    
     # Define state vector and axial distance
     V  = []
     s  = []
@@ -409,7 +505,6 @@ if __name__ == '__main__':
     # Domain of integration and integration step. 
     # No need to go further than extent of the experimental plume
     t1 = sexp.max()             
-    dt = .1
     dsexp = np.diff(sexp)
 	
     ind = 0
@@ -498,7 +593,7 @@ if __name__ == '__main__':
         #f = interp1d(s, theta)
         ax[1].plot(theta - thetaexp, # / sig_thetaexp,
                    s, '-', #c='C3',
-                   label=r'($\theta_\mathrm{model} - \theta_\mathrm{exp})$')
+                   label=r'$\theta_\mathrm{model} - \theta_\mathrm{exp}$')
         #/ \sigma_{\theta_{\mathrm{exp}}}$')
         #r'$\theta$')
         #
