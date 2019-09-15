@@ -218,11 +218,12 @@ def objectiveFn(Vexp, Vsyn, cov=None, p=(.09, .6, .1, 1., None),
 
     TO DO
     -----
-    Include an "enforce" statement at beginning of code to check for 
-    dimensional coherence
-
+    Check for dimensional coherence - "enforce" statement at beginning 
+    of code?
+    
     """
-    # If no stdr /  dev is provided for the experimental data, set unit weights.
+    # If no stdr /  dev is provided for the experimental data,
+    # set unit weights.
     if cov is None:
         sigma = np.ones_like(Vexp)
         cov   = np.eye(len(Vexp))
@@ -235,11 +236,12 @@ def objectiveFn(Vexp, Vsyn, cov=None, p=(.09, .6, .1, 1., None),
     # Do some checking on the size of inputs
     if any(len(row) != len(cov) for row in cov):
         raise TypeError('Covariance matrix must be square. ')
-    if (len(cov) != len(Vexp)) or (len(cov) != len(Vsyn)):
-        raise TypeError('Covariance matrix must be compatible with model' +
-                        'and data vectors')
+    # if (len(cov) != len(Vexp)) or (len(cov) != len(Vsyn)):
+    #     raise TypeError('Covariance matrix must be compatible with model' +
+    #                     'and data vectors')
     if (len(Vexp) != len(Vsyn)):
         raise TypeError('Model and data vectors must be of equal length')
+
 
     # Check that the synthetic and experimental data are of the same dimension
     # then define a residual (difference).
