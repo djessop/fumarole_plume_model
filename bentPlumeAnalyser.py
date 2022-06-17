@@ -257,14 +257,16 @@ def initialGuessAtAxis(N=50, p=None):
     """
     Get a maximum of N points from the current image
     """
-    # If no input for p is given (i.e. p is None), p is an empty list, or p is an empty array,
-    # or any entry in p is None, then initialise p
-    if (p is None): #or (type(p) is list and p == []) or (type(p) is np.ndarray and p.size == 0) or if any(p == None):
+    # If no input for p is given (i.e. p is None), p is an empty list, or
+    # p is an empty array, or any entry in p is None, then initialise p.
+    # or (type(p) is list and p == []) or (type(p) is np.ndarray
+    # and p.size == 0) or if any(p == None):
+    if p is None: 
         print('Click on the points that will form the initial guess')
-        p = np.array(plt.ginput(N))        
-        return p #np.append([0, 0], p).reshape(len(p)+1, 2)
-    else:
+        p = np.array(plt.ginput(N)) # Max of N pts
         return p
+    else:
+        return p                # Do nothing
 
 
 def rotateImage(img, angle, pivot):
@@ -274,11 +276,11 @@ def rotateImage(img, angle, pivot):
 
     Parameters
     ----------
-    img : 2D array (image)
+    img : 2d array (image)
         The 2D (greyscale) image to be rotated
     angle : scalar
         Angle (in degrees) through which the image will be rotated
-    pivot : array like
+    pivot : array_like
         Two-element point around which the image will be rotated
 
     Returns

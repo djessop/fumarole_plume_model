@@ -158,7 +158,6 @@ def derivs(s, V, p=(.09, .6, .1, 1., None)):
     if w is None:
         w = wind(s, V)
 
-    # print(q, m, f, theta)
     # calculate the entrainment velocity
     u_e = ((alpha * abs(u - w * np.cos(theta))**m)
 		   + (beta * abs(w * np.sin(theta)))**m) ** (1./m)
@@ -178,6 +177,46 @@ def derivs(s, V, p=(.09, .6, .1, 1., None)):
     return dVds
 
 
+def integrator(p, s0, V0, derivs=derivs):
+    """ 
+    Return the solution (s, V) of derivs.  Wrapper for the numerical 
+    integration of the model defined by derivs, using the 
+    scipy.integrate.ode module.
+    """
+    # Initialise an integrator object
+    r = ode(derivs).set_integrator('lsoda', nsteps=1e6)
+    r.set_initial_value(V0, 0.)
+    r.set_f_params(p)
+    
+    # Define state vector and axial distance
+    V = []    # State vector
+    s = []    # Axial distance
+    V.append(V0)
+    s.append(s0)
+    
+    # Define the individual variables - these will be calculated at run time
+    Q, M, F, theta = V0  # 0., 0., 0., 0.
+    Q = np.float64(Q)
+    M = np.float64(M)
+    F = np.float64(F)
+    theta = np.float64(theta)
+    
+    ####################################
+
+    # Integrate, whilst successful, until the domain size is reached
+    ind = 0
+    while r.successful() and r.t < t1 and M >= 0.:
+        dt = dsexp[ind]
+        r.integrate(r.t + dt)
+        V.append(r.y)
+        s.append(r.t)
+        Q, M, F, theta = r.y
+        ind += 1
+    s = np.array(s)
+    V = np.float64(np.array(V))
+    return s, V
+
+
 def wind(s, V):
     """ 
     Functions that define the wind at altitude, z.
@@ -186,11 +225,7 @@ def wind(s, V):
     """
 
     theta = V[3]
-    # ds = np.diff(s)
-    # z = []
-    # for (ds_, theta_) in zip(ds, theta):
-    #     z.append(ds_ * np.sin(theta_))
-    # z = np.array(z)
+
     return .01
 
 
@@ -236,9 +271,6 @@ def objectiveFn(Vexp, Vsyn, cov=None, p=(.09, .6, .1, 1., None),
     # Do some checking on the size of inputs
     if any(len(row) != len(cov) for row in cov):
         raise TypeError('Covariance matrix must be square. ')
-    # if (len(cov) != len(Vexp)) or (len(cov) != len(Vsyn)):
-    #     raise TypeError('Covariance matrix must be compatible with model' +
-    #                     'and data vectors')
     if (len(Vexp) != len(Vsyn)):
         raise TypeError('Model and data vectors must be of equal length')
 
@@ -254,26 +286,22 @@ def objectiveFn(Vexp, Vsyn, cov=None, p=(.09, .6, .1, 1., None),
         # Note that the "@" syntax is not recognised for python < 3.5
         # In this case use r.T.dot(invSig).dot(r)
         objFn = .5 * r.T @ np.linalg.inv(cov) @ r  # Quadratic form
-        # objFn = .5 * r.T.dot(np.linalg.inv(cov)).dot(r)
     elif mode == 'abs':
         objFn = (np.abs(r) / sigma).sum()
     else:
         raise Warning('Covariance matrix of unknown dimensions')
 	#print(objFn)
 
-    # # Degrees of freedom = number of data points - number of model params
-    # # Estimate the Chi**2 variable
-    # DOF = Vexp.shape[0] - Vexp.shape[1]
-    # objFn /= DOF
-
     return np.exp(-objFn)
 
 
 def objectiveFn2(V0, derivs, p, sexp, dexp, sig_dexp=None, mode='lsq'):
     """
-    Returns the objective (misfit/cost) function as the either (weighted) 
-    sum of square differences between the synthetic and "experimental" data, 
-    or the (weighted) absolute difference.
+    Return the objective (misfit/cost) function as the either sum of 
+    square differences between the synthetic and "experimental" data, 
+    or the absolute difference.  If the vector of standard errors on 
+    the data, 'sig_dexp', is supplied, the objective function will be
+    built from weights derived from these.
     
     Parameters
     ----------
@@ -297,10 +325,11 @@ def objectiveFn2(V0, derivs, p, sexp, dexp, sig_dexp=None, mode='lsq'):
 
     Notes
     -----
-    1)  The covariance matrix of data is assumed to be diagonal, though there 
-    will be a strong correlation between width and angle, for example.  Non 
-    (main) diagonal covariances can be dealt with by rewritting the code to 
-    allow for the covariance matrix to be explicitly passed to the function.
+    1)  The covariance matrix of data is assumed to be diagonal though there 
+    will be a strong correlation between several variables, for example width 
+    and plume angle.  Non (main) diagonal covariances can be dealt with by 
+    rewritting the code to allow for the covariance matrix to be explicitly 
+    passed to the function.
     2)  The synthetic data is flattened ('ravelled') according to 'C' 
     (row-major) format.  Thus care should be taken to flatten the natural data 
     using the same format.
@@ -344,7 +373,7 @@ def objectiveFn2(V0, derivs, p, sexp, dexp, sig_dexp=None, mode='lsq'):
     # Convert plume flux parameters into basic params
     b, u, gp = Q / np.sqrt(M), M / Q, F / Q
 
-    d   = np.array([b]).ravel(order='C')
+    d   = np.array([theta]).ravel(order='C')
     res = dexp - d
 
     # Kernel definition depends on mode
@@ -354,7 +383,81 @@ def objectiveFn2(V0, derivs, p, sexp, dexp, sig_dexp=None, mode='lsq'):
         else:
             # Build and invert covariance matrix
             invCd = np.linalg.inv(np.diag(sig_dexp**2))  # Cov. is std**2
-            kernel = .5 * res @ invCd @ res
+            kernel = .5 * res @ invCd @ res  # Requires python >= 3.5
+    else:
+        if sig_dexp is None:
+            kernel = np.abs(res).sum()
+        else:
+            kernel = np.abs(res / sig_dexp).sum()
+
+    return kernel
+
+
+def objectiveFn3(V0, derivs, p, sexp, dexp, sig_dexp=None, mode='lsq'):
+    """
+    Return the objective (misfit/cost) function as the either sum of 
+    square differences between the synthetic and "experimental" data, 
+    or the absolute difference.  If the vector of standard errors on 
+    the data, 'sig_dexp', is supplied, the objective function will be
+    built from weights derived from these.
+    
+    Parameters
+    ----------
+    V0 : list or array_like
+        Current "guess" of the source conditions.
+    derivs : callable
+        function that describes the model.
+    p : tuple or array_like
+        model parameters.
+    sexp : list or array_like
+        independent variable (sexp) of experimental (or natural) data.
+    dexp : list or array_like
+        state vector of experimental (or natural) data consisting of width 
+        (bexp) and angle (thetaexp).
+    sig_dexp : list or array_like (optional)
+        covariance matrix of the experimental data for weighting.  
+    mode : str (optional)
+        switch for choosing the form of the objective function.  Choices 
+        are 'least-squares' (lsq) or 'absolute differences' (abs).  Default 
+        is 'lsq'.
+
+    Notes
+    -----
+    1)  The covariance matrix of data is assumed to be diagonal though there 
+    will be a strong correlation between several variables, for example width 
+    and plume angle.  Non (main) diagonal covariances can be dealt with by 
+    rewritting the code to allow for the covariance matrix to be explicitly 
+    passed to the function.
+    2)  The synthetic data is flattened ('ravelled') according to 'C' 
+    (row-major) format.  Thus care should be taken to flatten the natural data 
+    using the same format.
+
+    TO DO
+    -----
+    - Check for dimensional coherence
+    - Explicitly pass the covariance matrix
+
+    """
+    from scipy.integrate import solve_ivp
+    
+    sol = solve_ivp(derivs, [sexp[0], sexp[-1]], V0, args=(p,), t_eval=sexp)
+    s, (Q, M, F, theta) = sol.t, sol.y
+    #Q, M, F, theta = np.array(Q), np.array(M), np.array(F), np.array(theta)
+
+    # Convert plume flux parameters into basic params
+    b, u, gp = Q / np.sqrt(M), M / Q, F / Q
+
+    d   = np.array([b, gp]).ravel(order='C')
+    res = dexp - d
+
+    # Kernel definition depends on mode
+    if mode == 'lsq':
+        if sig_dexp is None:
+            kernel = .5 * res.dot(res)
+        else:
+            # Build and invert covariance matrix
+            invCd = np.linalg.inv(np.diag(sig_dexp**2))  # Cov. is std**2
+            kernel = .5 * res @ invCd @ res  # Requires python >= 3.5
     else:
         if sig_dexp is None:
             kernel = np.abs(res).sum()
@@ -364,7 +467,7 @@ def objectiveFn2(V0, derivs, p, sexp, dexp, sig_dexp=None, mode='lsq'):
     return -np.exp(-kernel)
 
 
-def loadICsParameters(pathname, run, alpha=None, beta=None, m=None):
+def loadICsParameters(pathname, run, alpha=.09, beta=.6, m=1.5):
     """ 
     Returns initial conditions and model parameters determined from CGTA's 
     experimental data
@@ -391,12 +494,6 @@ def loadICsParameters(pathname, run, alpha=None, beta=None, m=None):
     
     # Define function parameters to pass to derivs.  
     # Tuple p contains alpha, beta, N, m, w
-    if alpha is None:
-        alpha = .09
-    if beta is None:
-        beta = .6
-    if m is None:
-        m = 1.5
     p = (alpha, beta, N, m, W)
 
     gp0 = -(rhoa0 - rho0) / rhoa0 * g
@@ -572,73 +669,28 @@ if __name__ == '__main__':
 
         # Model plume axis trajectory
         ax[0].plot(xmod, zmod, 'g-', label='model', lw=2)
-        # ax[0].plot(xup, zup, 'g--', lw=1)
-        # ax[0].plot(xlo, zlo, 'g--', lw=1)
-        # ax[0].set_xlim(XLim)
         ax[0].axes.invert_yaxis() # set_ylim(YLim[::-1])
         ax[0].legend(loc=4, framealpha=.6)
         ax[0].grid(True)
 
-        # Plot differences between model and natural data
-        # Normalise dimensional solutions by source value (or mean?)
-        # ax[1].plot(b/b[0], s, '-', c='C0')
-        # ax[1].plot(u/u[0], s, '-', c='C1')
-        # ax[1].plot(gp/gp[0], s, '-', c='C2') 
-
         # Create interpolation structures based on the model solution which
         # will be used to recast the model at the experimental data points.
         # PLUME WIDTH
-        #f = interp1d(s, b)
         ax[1].plot(b - bexp, s,
                    label=r'$b_\mathrm{model} - b_\mathrm{exp}$')
         # PLUME ANGLE
-        #f = interp1d(s, theta)
         ax[1].plot(theta - thetaexp, # / sig_thetaexp,
                    s, '-', #c='C3',
                    label=r'$\theta_\mathrm{model} - \theta_\mathrm{exp}$')
-        #/ \sigma_{\theta_{\mathrm{exp}}}$')
-        #r'$\theta$')
-        #
-        # ax[1].plot(bexp / bexp[0], sexp, '--', c='C0')
-        # ax[1].plot(thetaexp, sexp, '--', c='C3')
         ax[1].set_title('Differences between model and expt data')
         ax[1].legend(loc='best',
                      framealpha=.6)
-        # ax[1].legend((r'$b/b_0$',
-        #               r'$\bar{u}/\bar{u}_0$',
-        #               r'$g/g_0$',
-        #               r'$\theta$',
-        #               # r'$b_{\mathrm{exp}} / b_0$',
-        #               r'$\theta_{\mathrm{exp}}$'),
-        #              loc='best',
-        #              framealpha=.6)
         ax[1].grid(True)
-        # ax[1].set_xlabel(r'Plume parameter/[-]')
         ax[1].set_ylabel(r'$s$/[cm]')
 
         dVds = []
         for s_, V_ in zip(s, V):                                               
             dVds.append(derivs(s_, V_)) 
         dVds = np.array(dVds)
-
-        # ax[2].plot(V, s, '-')
-        # ax[2].set_prop_cycle(None)
-        # ax[2].plot(dVds, s, '--')
-        # ax[2].grid()
-        # ax[2].set_xlim((-3, 33))
-
-        # ax[2].legend(('q', 'm', 'f', r'$\theta$',
-        #               'dq/ds', 'dm/ds', 'df/ds', r'd$\theta$/ds'),
-        #              loc=1)
-        # ax[2].set_xlabel(r'Plume parameter/[-]')
-        # ax[2].set_ylabel(r'$s$/[cm]')
-        # ax[2].set_title('Plume parameters and their derivatives')
-
-        # # Create interpolation structures based on the model solution which
-        # # will be used to recast the model at the experimental data points.
-        # # PLUME ANGLE
-        # f = interp1d(s, V[:,3])
-        # ax[3].plot((thetaexp - f(sexp))**2, sexp, '-', label='plume angle')
-        # ax[3].set_title('Differences between model and expt data')
 
         plt.show()
