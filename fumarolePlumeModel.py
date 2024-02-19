@@ -89,7 +89,7 @@ to do:
   Stop the calculation at this point?xs
 """
 
-from scipy.integrate import ode
+from scipy.integrate import ode, solve_ivp
 from scipy.interpolate import interp1d
 from scipy.io.matlab import loadmat
 from bentPlumeAnalyser import (plumeTrajectory,
@@ -215,6 +215,13 @@ def integrator(p, s0, V0, derivs=derivs):
     s = np.array(s)
     V = np.float64(np.array(V))
     return s, V
+
+
+def integrator2(V0, p, x=None):
+    if x is None:
+        x   = np.linspace(0, 25, 21)
+    sol = solve_ivp(derivs, [x[0], x[-1]], V0, args=(p,), t_eval=x)
+    return sol.t, sol.y.T
 
 
 def wind(s, V):
@@ -411,9 +418,10 @@ def objectiveFn3(V0, derivs, p, sexp, dexp, sig_dexp=None, mode='lsq'):
         model parameters.
     sexp : list or array_like
         independent variable (sexp) of experimental (or natural) data.
-    dexp : list or array_like
+    dexp : array_like
         state vector of experimental (or natural) data consisting of width 
-        (bexp) and angle (thetaexp).
+        (bexp) and reduced gravity (gpexp).  Should be an array of size 
+        nobs-by-2 where nobs is the number of observations.
     sig_dexp : list or array_like (optional)
         covariance matrix of the experimental data for weighting.  
     mode : str (optional)
@@ -442,13 +450,15 @@ def objectiveFn3(V0, derivs, p, sexp, dexp, sig_dexp=None, mode='lsq'):
     
     sol = solve_ivp(derivs, [sexp[0], sexp[-1]], V0, args=(p,), t_eval=sexp)
     s, (Q, M, F, theta) = sol.t, sol.y
-    #Q, M, F, theta = np.array(Q), np.array(M), np.array(F), np.array(theta)
 
     # Convert plume flux parameters into basic params
     b, u, gp = Q / np.sqrt(M), M / Q, F / Q
 
-    d   = np.array([b, gp]).ravel(order='C')
-    res = dexp - d
+    d   = np.array([b, gp]).T
+    if len(dexp) >= len(d):
+        res = (dexp[:len(d)] - d).ravel()
+    else:
+        res = (dexp - d[:len(dexp)]).ravel()
 
     # Kernel definition depends on mode
     if mode == 'lsq':

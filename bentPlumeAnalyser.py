@@ -61,7 +61,7 @@ def centroidPosn(x, y, n=2):
     return (x * y**n).sum() / (y**n).sum()
 
 
-def plumeTrajectory(image, n=2):
+def plumeTrajectory(image, n=2, theta=np.pi/2):
     """
     Locate the "centre of mass" and spread of a plume, following [1]
 
@@ -71,6 +71,8 @@ def plumeTrajectory(image, n=2):
         Plume image.
     n : scalar
         Exponent to which rows and cols are raised, default is 2.
+    theta : float
+        Initial plume angle.  Default is np.pi / 2 (starts vertically)
 
     Returns
     -------
@@ -94,7 +96,7 @@ def plumeTrajectory(image, n=2):
     x, z = np.arange(image.shape[1]), np.arange(image.shape[0])
     xbar, xsig, zbar, zsig = [], [], [], []
     p0 = (.8, 50, 50)
-    theta = np.pi / 2           # Plume starts vertically
+
     for pos, row in enumerate(image):
         if any(row):
             xbar.append(centroidPosn(x, row))
@@ -141,12 +143,31 @@ def plumeTrajectory(image, n=2):
     return xbar, zbar, x0
     
 
-def gaussian_profile(x, *p):
+def gaussian_profile(x, offset, amplitude, loc, width):
     """
-    Returns a gaussian where the amplitude, centre and width are defined by
-    the tuple p
+    Returns an offset gaussian profile defined by its amplitude, 
     """
-    return p[0] * np.exp(-(x - p[1])**2 / (2. * p[2]**2))
+    return offset + amplitude * np.exp(-.5 * ((x - loc) / width)**2)
+
+
+def show_scaled_image(image, scale_factor=1., vent_loc=None,
+                      ax=None, cmap=plt.cm.gray):
+    """
+    """
+    Ox, Oz = 0, 0
+    if vent_loc is not None:
+        Ox, Oz = vent_loc
+    
+    extentInPix = np.array([0, image.shape[1], 0, image.shape[0]])
+    extent = np.array([(extentInPix[:2] - Ox)/scale_factor,
+                       (extentInPix[2:] - Oz)[::-1]/scale_factor]).flatten()
+    
+    if ax is None:
+        fig, ax = plt.subplots()
+
+    im = ax.imshow(image, extent=extent, cmap=cmap)
+
+    return extent, im, ax
 
 
 def openPlotExptImage(path, axes, exptNo=1, ind=None, showPlot=True):
@@ -253,7 +274,7 @@ def plumeAngle(x, y, errors=None):
         return theta
 
 
-def initialGuessAtAxis(N=50, p=None):
+def initialGuessAtAxis(N=50):
     """
     Get a maximum of N points from the current image
     """
@@ -264,9 +285,8 @@ def initialGuessAtAxis(N=50, p=None):
     if p is None: 
         print('Click on the points that will form the initial guess')
         p = np.array(plt.ginput(N)) # Max of N pts
-        return p
-    else:
-        return p                # Do nothing
+    return p
+
 
 
 def rotateImage(img, angle, pivot):
@@ -298,7 +318,7 @@ def rotateImage(img, angle, pivot):
     return imgR
 
 
-def trueLocationWidth(p, data, errors=None, plotting=False):
+def trueLocationWidth(data, p=None, errors=None, plotting=False):
     '''
     Returns the "true" location of the plume centroid for 
 
@@ -322,10 +342,7 @@ def trueLocationWidth(p, data, errors=None, plotting=False):
     plumeAngle
     '''
 
-#print(np.stack((p[:,0], p[:,1], theta)).T)
-    if p is not None:
-        p = initialGuessAtAxis(p=p)
-    else:
+    if p is None:
         p = initialGuessAtAxis()
 
     _s = distAlongPath(p[:,0], p[:,1])
@@ -459,14 +476,14 @@ if __name__ == '__main__':
     plt.close('all')    # Clear pre-existing plots
 
     # Set a path variable according to which experiment is required
-    #exptNo = 31
-    #path   = './data/ExpPlumes_for_Dai/exp%02d/' % exptNo
+    exptNo = 3
+    path   = './data/ExpPlumes_for_Dai/exp%02d/' % exptNo
     #fname  = path + 'gsplume.mat'
-    path = '/home/ovsg/Documents/Thermographie/done/tiff/2019/mu sigma/'
+    #path = '/home/ovsg/Documents/Thermographie/done/tiff/2019/mu sigma/'
 
     # Initial guesses.  Either load from file or make a fresh guess
-    #with open(path + 'exp%02d_initGuess.json' % exptNo) as f:
-    with open(path + '20190314_CSS_initGuess.json') as f:
+    with open(path + 'exp%02d_initGuess.json' % exptNo) as f:
+    #with open(path + '20190314_CSS_initGuess.json') as f:
         jsondata = json.load(f)
     p = np.array(jsondata['data'])
     
