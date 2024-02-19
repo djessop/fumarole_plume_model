@@ -3,20 +3,26 @@
 """
 bentPlumeAnalyser.py
 
-A set of utilities to analyse wind affected (bent) plumes
+A set of utilities to analyse wind-affected (bent) plumes
 
-Provided functions:
+Provides functions:
 -------------------
-- plumeTrajectory
+- centroid_posn
     Locate the "centre of mass" and spread of a plume.
-- rotatedPlumeSection
-    Takes a part of the experimental image, and rotates it by a given angle.
-- openPlotExptImage
+- plume_trajectory
+- gaussian_profile
+- show_scaled_image    
+- open_plot_expt_image
     [No documentation currently available]
-- distAlongPath
+- dist_along_path
     Calculates the cumulative distance along the plume axis.
-- plumeAngle
+- plume_angle
     Calculates the plume angle at each point along its axis.
+- initial_guess_at_axis
+- rotate_image
+    rotates an image by a given angle.
+- true_location_width    
+- path_from_smoothed_theta
 """
 from scipy.io.matlab import loadmat
 from scipy.interpolate import interp1d, splrep, splev
@@ -28,10 +34,10 @@ import matplotlib.pyplot as plt
 import json 
 
 
-scaleFactor = 38.               # Conversion factor/[pix/cm]
+scale_factor = 38.               # Conversion factor/[pix/cm]
 
 
-def centroidPosn(x, y, n=2):
+def centroid_posn(x, y, n=2):
     '''
     Locate the "centre of mass" and spread of a plume, following [1]
 
@@ -61,7 +67,7 @@ def centroidPosn(x, y, n=2):
     return (x * y**n).sum() / (y**n).sum()
 
 
-def plumeTrajectory(image, n=2, theta=np.pi/2):
+def plume_trajectory(image, n=2, theta=np.pi/2):
     """
     Locate the "centre of mass" and spread of a plume, following [1]
 
@@ -99,7 +105,7 @@ def plumeTrajectory(image, n=2, theta=np.pi/2):
 
     for pos, row in enumerate(image):
         if any(row):
-            xbar.append(centroidPosn(x, row))
+            xbar.append(centroid_posn(x, row))
             zbar.append(pos)
             # try:
                 # popt, pcov = curve_fit(gaussian_profile, x, row, p0)
@@ -127,7 +133,7 @@ def plumeTrajectory(image, n=2, theta=np.pi/2):
         if any(col):
             # Calculate weighted mean and std dev over the col
             xbar.append(pos + x0)
-            zbar.append(centroidPosn(z, col))
+            zbar.append(centroid_posn(z, col))
             # zsig.append(np.sqrt(((z - zbar[-1])**2 * col).sum() / col.sum()))
             # try:
             #     popt, pcov = curve_fit(gaussian_profile, z, col, p0)
@@ -138,8 +144,8 @@ def plumeTrajectory(image, n=2, theta=np.pi/2):
     xbar = np.array(xbar)
     zbar = np.array(zbar)
     x0 = (xbar[0], zbar[0])
-    xbar = (xbar - x0[0]) / scaleFactor
-    zbar = (zbar - x0[1]) / scaleFactor
+    xbar = (xbar - x0[0]) / scale_factor
+    zbar = (zbar - x0[1]) / scale_factor
     return xbar, zbar, x0
     
 
@@ -170,7 +176,8 @@ def show_scaled_image(image, scale_factor=1., vent_loc=None,
     return extent, im, ax
 
 
-def openPlotExptImage(path, axes, exptNo=1, ind=None, showPlot=True):
+def open_plot_expt_image(path, axes, scale_factor=scale_factor,
+                         exptNo=1, ind=None, showPlot=True):
     """
     
     """
@@ -191,12 +198,12 @@ def openPlotExptImage(path, axes, exptNo=1, ind=None, showPlot=True):
     # of 38 pixels to 1 cm.  There's probably some neater and more pythonic
     # way of calculating the world extent list but at least it works as is.
     extentInPix = [0, data.shape[1], 0, data.shape[0]]
-    extent = np.array([(extentInPix[:2] - Ox)/scaleFactor,
-                       (Oz - extentInPix[2:])/scaleFactor]).flatten().tolist()
-    xexp = (xexp - Ox) / scaleFactor
-    zexp = (Oz - zexp) / scaleFactor
+    extent = np.array([(extentInPix[:2] - Ox)/scale_factor,
+                       (Oz - extentInPix[2:])/scale_factor]).flatten().tolist()
+    xexp = (xexp - Ox) / scale_factor
+    zexp = (Oz - zexp) / scale_factor
 
-    xbar, zbar, x0 = plumeTrajectory(data)
+    xbar, zbar, x0 = plume_trajectory(data)
 
     if len(axes) > 1 and ind is not None:
         ax = axes[ind]
@@ -215,7 +222,7 @@ def openPlotExptImage(path, axes, exptNo=1, ind=None, showPlot=True):
     return ax, im, data, xexp, zexp, extent, (Ox, Oz)
 
 
-def distAlongPath(x, y):
+def dist_along_path(x, y):
     """
     Returns a vector of the cumulative euclidian norms for input (x,y), i.e.
     the distance travelled along the path defined by the loci (x, y)
@@ -230,7 +237,7 @@ def distAlongPath(x, y):
     return np.append(0, np.sqrt(dx**2 + dy**2).cumsum()) + s0
 
 
-def plumeAngle(x, y, errors=None):
+def plume_angle(x, y, errors=None):
     """
     Calculates the angle of a plume from the axis coordinates, (x,y), as
     $\theta = \atan(dy / dx)$.  Note that $\theta$ is measured relative to the 
@@ -238,18 +245,19 @@ def plumeAngle(x, y, errors=None):
 
     parameters
     ----------
-    x, y : array-like
+    x, y : array_like
         coordinates of the plume axis
-    errors : tuple or array-like (optional)
+    errors : tuple or array_like (optional)
         measurement errors on x and y.  If errors contains more than two 
         elements, an error will be raised.
 
     returns
     -------
-    theta : array-like
+    theta : array_like
         angle of the plume axis relative to the horizontal.  Positive angles 
         are measured in the anti-clockwise direction.
-    sig_theta : array-like
+    sig_theta : array_like
+        error associated with angle calculations
 
     see also
     --------
@@ -265,16 +273,16 @@ def plumeAngle(x, y, errors=None):
 
     if errors is not None:
         # Advanced functionality: calculate measurement error
-        denom = dx**2 + dy**2
-        dfdx = - dy / denom
-        dfdy =   dx / denom
+        denom     = dx**2 + dy**2
+        dfdx      = - dy / denom
+        dfdy      =   dx / denom
         sig_theta = np.sqrt((dfdx * errors[0])**2 + (dfdy * errors[1])**2)
         return theta, sig_theta
     else:    
         return theta
 
 
-def initialGuessAtAxis(N=50):
+def initial_guess_at_axis(N=50):
     """
     Get a maximum of N points from the current image
     """
@@ -289,7 +297,7 @@ def initialGuessAtAxis(N=50):
 
 
 
-def rotateImage(img, angle, pivot):
+def rotate_image(img, angle, pivot):
     '''
     Rotates an image by padding the edges by an amount equal to the 
     location of the pivot point.
@@ -305,20 +313,26 @@ def rotateImage(img, angle, pivot):
 
     Returns
     -------
-    imR : 2D array (image)
+    img_rot : 2D array (image)
         The rotated image
     '''
     from skimage.transform import rotate
 
-    padX = [img.shape[1] - pivot[0], pivot[0]]
-    padY = [img.shape[0] - pivot[1], pivot[1]]
-    imgP = np.pad(img, [padY, padX], 'edge')
-    imgR = rotate(imgP, angle, resize=False, mode='edge') #, cval=imgP.min())
+    pad_x = [img.shape[1] - pivot[0], pivot[0]]
+    pad_y = [img.shape[0] - pivot[1], pivot[1]]
+    pad_w = np.array([pad_y, pad_x]).astype(int)
+    row_trim, col_trim = np.array(img.shape) // 2
+    # Add left and right padding to image so as to centre the pivot location.
+    # Padded image will be twice the size of the initial image array.
+    img_pad = np.pad(img, pad_w, 'edge')
+    img_rot = rotate(img_pad, angle, resize=False, mode='edge')
 
-    return imgR
+    return img_rot[row_trim:2*img.shape[0]-row_trim,
+                   col_trim:2*img.shape[1]-col_trim]
 
 
-def trueLocationWidth(data, p=None, errors=None, plotting=False):
+def true_location_width(data, p=None, scale_factor=1,
+                        errors=None, plotting=False):
     '''
     Returns the "true" location of the plume centroid for 
 
@@ -339,13 +353,13 @@ def trueLocationWidth(data, p=None, errors=None, plotting=False):
 
     See also
     --------
-    plumeAngle
+    plume_angle
     '''
 
     if p is None:
-        p = initialGuessAtAxis()
+        p = initial_guess_at_axis()
 
-    _s = distAlongPath(p[:,0], p[:,1])
+    _s = dist_along_path(p[:,0], p[:,1])
 
     
     # Iterate through the selected points, rotating the image through 
@@ -374,7 +388,7 @@ def trueLocationWidth(data, p=None, errors=None, plotting=False):
     # Loop through the locations in p, rotating the image as required and
     # obtaining the maximum intensity and the half width of the plume
     # "section" at each location from a Gaussian fit.
-    theta, sig_theta = plumeAngle(p[:,0], p[:,1], errors=[1/scaleFactor]*2)
+    theta, sig_theta = plume_angle(p[:,0], p[:,1], errors=[1/scale_factor]*2)
     # Get angles in degrees and in the correct quadrant
     theta = 90. + theta * 180 / np.pi
     # Lists for the variance of b and d (from covariance matrix)
@@ -382,7 +396,7 @@ def trueLocationWidth(data, p=None, errors=None, plotting=False):
 
     for q, th, s in zip(p, theta, _s):
         q    = np.uint16(q)
-        imR  = rotateImage(data[::-1], th, q)
+        imR  = rotate_image(data[::-1], th, q)
         M, N = imR.shape
         p0   = (1., N/2, 50.)
 
@@ -399,7 +413,7 @@ def trueLocationWidth(data, p=None, errors=None, plotting=False):
         plumeWidth.append(popt[2])
         var_b.append(pcov[2][2])
         # Alternativly, apply the centroid method
-        COM = centroidPosn(X, row, n=4)
+        COM = centroid_posn(X, row, n=4)
         # Distance from centre of mass to the centre of the row, in
         # rotated coordinates
         d.append(popt[1] - (N/2)) # COM - (N/2) #
@@ -457,7 +471,7 @@ def trueLocationWidth(data, p=None, errors=None, plotting=False):
         return np.array(trueLocn), np.abs(np.array(plumeWidth))
 
 
-def pathFromSmoothedTheta(s, theta, snew, smoothing=0.): 
+def path_from_smoothed_theta(s, theta, snew, smoothing=0.): 
     '''
     Returns a smoothed version of the axis locus
     '''
@@ -490,7 +504,7 @@ if __name__ == '__main__':
     fig, ax = plt.subplots()    
     try:
         axes = np.array([ax])
-        ax, im, data, xexp, zexp, extent, (Ox, Oz) = openPlotExptImage(path,
+        ax, im, data, xexp, zexp, extent, (Ox, Oz) = open_plot_expt_image(path,
                                                                        axes),
                                                                        #exptNo)
         leg  = ax.legend()
@@ -498,24 +512,24 @@ if __name__ == '__main__':
     except TypeError:
         print('file %s doesn\'t seem to exist...skipping!' % fname)
 
-    #p       = initialGuessAtAxis()  # Comment out if loading from file
-    pPixels = p.copy() * scaleFactor
+    #p       = initial_guess_at_axis()  # Comment out if loading from file
+    pPixels = p.copy() * scale_factor
     pPixels[:,0] += Ox
     pPixels[:,1] -= Oz
     pPixels[:,1] *= -1
 
-    thexp, sig_thexp = plumeAngle(p[:,0], p[:,1], errors=[1/scaleFactor]*2)
-    _, bexp, sig_p, sig_bexp = trueLocationWidth(pPixels, data,
-                                                 errors=[1/scaleFactor],
+    thexp, sig_thexp = plume_angle(*p.T, errors=[1/scale_factor]*2)
+    _, bexp, sig_p, sig_bexp = true_location_width(pPixels, data,
+                                                 errors=[1/scale_factor],
                                                  plotting=True)
 
     # Form the state variables that will be compared to model solution. 
-    #p[:,0] = (p[:,0] - Ox) / scaleFactor
-    #p[:,1] = (Oz - p[:,1]) / scaleFactor
-    bexp     /= scaleFactor
-    sig_bexp /= scaleFactor
-    sig_p    /= scaleFactor
-    sexp = distAlongPath(p[:,0], p[:,1])
+    #p[:,0] = (p[:,0] - Ox) / scale_factor
+    #p[:,1] = (Oz - p[:,1]) / scale_factor
+    bexp     /= scale_factor
+    sig_bexp /= scale_factor
+    sig_p    /= scale_factor
+    sexp = dist_along_path(p[:,0], p[:,1])
     Vexp = np.array([bexp, thexp]).T
     sigV = np.array([sig_bexp, sig_thexp]).T
 
