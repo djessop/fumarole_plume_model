@@ -23,6 +23,8 @@ Provides functions:
     rotates an image by a given angle.
 - true_location_width    
 - path_from_smoothed_theta
+- pixel_to_world_posns
+- world_to_pixel_posns
 """
 from scipy.io.matlab import loadmat
 from scipy.interpolate import interp1d, splrep, splev
@@ -34,7 +36,7 @@ import matplotlib.pyplot as plt
 import json 
 
 
-scale_factor = 38.               # Conversion factor/[pix/cm]
+# scale_factor = 38.               # Conversion factor/[pix/cm]
 
 
 def centroid_posn(x, y, n=2):
@@ -159,6 +161,7 @@ def gaussian_profile(x, offset, amplitude, loc, width):
 def show_scaled_image(image, scale_factor=1., vent_loc=None,
                       ax=None, cmap=plt.cm.gray):
     """
+    
     """
     Ox, Oz = 0, 0
     if vent_loc is not None:
@@ -176,8 +179,8 @@ def show_scaled_image(image, scale_factor=1., vent_loc=None,
     return extent, im, ax
 
 
-def open_plot_expt_image(path, axes, scale_factor=scale_factor,
-                         exptNo=1, ind=None, showPlot=True):
+def open_plot_expt_image(path, axes, scale_factor=1., exptNo=1,
+                         ind=None, showPlot=True):
     """
     
     """
@@ -331,18 +334,20 @@ def rotate_image(img, angle, pivot):
                    col_trim:2*img.shape[1]-col_trim]
 
 
-def true_location_width(data, p=None, scale_factor=1,
+def true_location_width(data, mask=None, p=None, scale_factor=1,
                         errors=None, plotting=False):
     '''
     Returns the "true" location of the plume centroid for 
 
     Parameters
     ----------
-    p : 1D array like
+    data : image (NDarray)
+        The plume image to be analysed.
+    p : array_like (optional)
         A guess (initial or updated) as to the location of the plume axis.
         "p" should be given in pixel values
-    data : image (2D-array)
-        The plume image to be analysed.
+    mask : NDarray (optional)
+        A mask to be applied to the image
 
     Returns
     -------
@@ -355,19 +360,21 @@ def true_location_width(data, p=None, scale_factor=1,
     --------
     plume_angle
     '''
+    if mask is None:
+        mask = np.ones_like(data).astype(float)
 
     if p is None:
         p = initial_guess_at_axis()
 
-    _s = dist_along_path(p[:,0], p[:,1])
+    s = dist_along_path(p[:,0], p[:,1])
 
     
     # Iterate through the selected points, rotating the image through 
     # the estimated angle and calculating the true location of the midpoint
     # at each point.
-    hWindowOffset = 250
-    vWindowOffset =   5
-    trueLocn, plumeWidth = [], []
+    h_window_offset = 250
+    v_window_offset =   5
+    true_locn, plume_width = [], []
     r2 = 0.
 
     if plotting:
@@ -378,54 +385,51 @@ def true_location_width(data, p=None, scale_factor=1,
         ax10 = fig1.add_axes([.05,       .05, .4,        .2])
         ax11 = fig1.add_axes([.61724047, .05, .26551907, .2])
 
-        ax00.imshow(data[::-1])
+        ax00.imshow(data) #[::-1])
         ax00.plot(p[:,0], p[:,1], 'r+', lw=2)
         
-        ax10.set_xlim((_s.min(), _s.max()))
+        ax10.set_xlim((s.min(), s.max()))
         ax10.axhline(0., c='k', ls='--', lw=.5)
         ax10.set_title('$r^2$: %.4f' % r2)
 
     # Loop through the locations in p, rotating the image as required and
     # obtaining the maximum intensity and the half width of the plume
     # "section" at each location from a Gaussian fit.
-    theta, sig_theta = plume_angle(p[:,0], p[:,1], errors=[1/scale_factor]*2)
-    # Get angles in degrees and in the correct quadrant
-    theta = 90. + theta * 180 / np.pi
-    # Lists for the variance of b and d (from covariance matrix)
+    theta, sig_theta = plume_angle(*p.T, errors=[1/scale_factor]*2)
+
+    # Lists for the var iance of b and d (from covariance matrix)
     var_b, var_d, d = [], [], []
 
-    for q, th, s in zip(p, theta, _s):
-        q    = np.uint16(q)
-        imR  = rotate_image(data[::-1], th, q)
-        M, N = imR.shape
-        p0   = (1., N/2, 50.)
+    for p_, th in zip(p, theta):
+        im_r = rotate_image(data, 90-np.rad2deg(th), p_)  # data[::-1]
+        ma_r = rotate_image(mask, 90-np.rad2deg(th), p_)  
+        M, N = im_r.shape
+        M_2  = M // 2
 
-        # Define the plume section as the 2*vWindowOffset+1 (~10) rows centred 
-        # about the current location.  Section is the sum over these rows.
-        row = imR[np.uint16(M/2)-vWindowOffset:np.uint16(M/2)+vWindowOffset, :]
-        row = row.sum(axis=0)
-        #row[np.uint16(N/2)+hWindowOffset:] = 0.
-        row -= row[0]
+        # Define the plume section as the 2*v_window_offset+1 (~10) rows 
+        # centred about the current location, and return the row-wise mean.
+        rma  = ma_r[M_2-v_window_offset:M_2+v_window_offset+1].mean(axis=0)
+        row  = im_r[M_2-v_window_offset:M_2+v_window_offset+1].mean(axis=0)
+        #row -= row.mean() * rma
+        row *= rma
 
         # Fit a Gaussian to the data and use this to define plume parameters
+        p0   = (0., row.max(), N/2, 50.)
         X = np.arange(len(row))
         popt, pcov = curve_fit(gaussian_profile, X, row, p0)
-        plumeWidth.append(popt[2])
-        var_b.append(pcov[2][2])
-        # Alternativly, apply the centroid method
-        COM = centroid_posn(X, row, n=4)
-        # Distance from centre of mass to the centre of the row, in
+        plume_width.append(popt[-1])
+        var_b.append(pcov[-1][-1])
+        # Distance from centre of plume to the centre of the row, in
         # rotated coordinates
         d.append(popt[1] - (N/2)) # COM - (N/2) #
-        var_d.append(d[-1]**2 * pcov[1][1])
+        var_d.append(d[-1]**2 * pcov[2][2])
         # Add the distance (i.e. residual) squared to the R2 value
         r2 += d[-1]**2
         # Do some geometry to find the "true location" of the plume centre
         # Should the distance from COM be added or subtracted from estimated
         # plume axis locus?
-        th *= np.pi/180         # Convert back from degrees to radians
-        trueLocn.append(np.float64(q) -   # Should this be a + or -?
-                        np.multiply(d[-1], [-np.cos(th),np.sin(th)]))
+        true_locn.append(np.float64(p_) -   # Should this be a + or -?
+                        np.multiply(d[-1], [np.cos(th), np.sin(th)]))
 
         # ----------------------------------------------------------------- #
         # The remainder of this function is dedicated to plotting the
@@ -435,13 +439,13 @@ def true_location_width(data, p=None, scale_factor=1,
         if plotting:
             # Plot the solution for visualisation purposes.
             # Update "true locations" on the base image
-            ax00.plot(trueLocn[-1][0], trueLocn[-1][1], 'c+', ms=8, lw=3)
+            ax00.plot(true_locn[-1][0], true_locn[-1][1], 'c+', ms=8, lw=3)
             
             # Rotate the image to show where current section is being calculated
-            ax01.imshow(imR)
+            ax01.imshow(im_r)
             ax01.axvline(N/2)
-            ax01.axvline(N/2 - hWindowOffset, ls='--')
-            ax01.axvline(N/2 + hWindowOffset, ls='--')
+            ax01.axvline(N/2 - h_window_offset, ls='--')
+            ax01.axvline(N/2 + h_window_offset, ls='--')
             ax01.axhline(M/2)
             
             # Plot the residual as a function of distance along plume axis
@@ -452,10 +456,10 @@ def true_location_width(data, p=None, scale_factor=1,
             ax11.clear()
             ax11.plot(X, row, '-', c='C0', label='data')
             ax11.plot(X, gaussian_profile(X, *popt), 'r-', label='gaussian')
-            ax11.axvline(COM, c='r', ls='--', lw=2, zorder=1)
+            ax11.axvline(popt[2], c='r', ls='--', lw=2, zorder=1)
             ax11.axvline(N/2, c='C0', ls='-', zorder=0)
-            ax11.axvline(N/2 - hWindowOffset, c='C0', ls='--', zorder=0)
-            ax11.axvline(N/2 + hWindowOffset, c='C0', ls='--', zorder=0)
+            ax11.axvline(N/2 - h_window_offset, c='C0', ls='--', zorder=0)
+            ax11.axvline(N/2 + h_window_offset, c='C0', ls='--', zorder=0)
             plt.pause(.5)  # Pause for a crude animation
         #plt.close()
 
@@ -464,11 +468,11 @@ def true_location_width(data, p=None, scale_factor=1,
     var_d = np.array(var_d)
     d = np.array(d)
     if errors is not None:
-        sig_trueLocn = np.sqrt(2 * errors[0]**2 + var_d + d**2 * sig_theta)
-        return (np.array(trueLocn), np.abs(np.array(plumeWidth)),
-                sig_trueLocn, np.sqrt(var_b))
+        sig_true_locn = np.sqrt(2 * errors[0]**2 + var_d + d**2 * sig_theta)
+        return (np.array(true_locn), np.abs(np.array(plume_width)),
+                sig_true_locn, np.sqrt(var_b))
     else:
-        return np.array(trueLocn), np.abs(np.array(plumeWidth))
+        return np.array(true_locn), np.abs(np.array(plume_width))
 
 
 def path_from_smoothed_theta(s, theta, snew, smoothing=0.): 
@@ -483,7 +487,15 @@ def path_from_smoothed_theta(s, theta, snew, smoothing=0.):
         dz = ds * np.sin(th) 
         xnew.append(xnew[-1] + dx) 
         znew.append(znew[-1] + dz) 
-    return np.array(xnew), np.array(znew), thetaNew 
+    return np.array(xnew), np.array(znew), thetaNew
+
+
+def pixel_to_world_posns(pixel_posns, offset, scale_factor=1):
+    return (pixel_posns - offset) * [1, -1] / scale_factor
+
+
+def world_to_pixel_posns(world_posns, offset, scale_factor=1):
+    return world_posns * [1, -1] * scale_factor + offset
     
 
 if __name__ == '__main__':
