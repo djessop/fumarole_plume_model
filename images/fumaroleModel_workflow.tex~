@@ -1,0 +1,65 @@
+\documentclass{standalone}
+
+\usepackage{tikz}
+
+\usetikzlibrary{shapes, arrows, positioning}
+
+\usepackage{calrsfs}
+\usepackage{amsmath, amsbsy}
+
+\DeclareMathAlphabet{\pazocal}{OMS}{zplm}{m}{n}
+\newcommand{\objS}{\pazocal{S}}
+\newcommand{\p}{\boldsymbol{p}}
+\newcommand{\pexp}{\p^{\mathrm{exp}}}
+\renewcommand{\pmod}{\p^{\mathrm{model}}}
+
+%------------------------------------------------------------------------------%
+\begin{document}
+\pagestyle{empty}
+
+\tikzstyle{decision} = [diamond, draw, fill=blue!20, text width=6em,
+  text badly centered, rounded corners, node distance=3cm, inner sep=0pt]
+\tikzstyle{block} = [rectangle, draw, fill=blue!20, text width=7em, 
+  text centered, rounded corners, minimum height=4em]
+\tikzstyle{line} = [draw, -latex']
+\tikzstyle{cloud} = [draw, rectangle, fill=red!20, node distance=3cm,
+  text width=7em, minimum height=2em, rounded corners, text badly centered]
+
+
+\begin{tikzpicture}[node distance=3.5cm, auto]
+  % Place nodes
+  \node [block] (init) {Initial guess of source conditions, $\p_0$};
+  \node [block, right of=init] (solver) {Solver, $\p = f(\p_0)$};
+  \node [block, right of=solver, text width=13em, node distance=4.5cm] 
+  (objective) {Objective fn, \\
+    $\objS = \sum{\left(\dfrac{\pexp - \pmod}{\sigma}\right)^2}$};
+  \node [cloud, above of=objective, node distance=2cm] (exp) {
+    ``Experimental'' data: \\
+    $\pexp$, $\sigma$};
+  \node [block, right of=objective, node distance=4.5cm] (gradient) {Gradient, 
+    $\dfrac{\partial \objS}{\partial \p_0}$};
+  \node [block, below of=solver, node distance=4cm] (update) {Update initial 
+    conditions, $\p_0 = \p_0^{\mathrm{old}}$};
+  \node [decision, right of=gradient, node distance=3.5cm] (tolerance) {
+    Tol. condition, $\p_0 - \p < \mathrm{tol}$};
+  \node [decision, below=2em of tolerance, node distance=4.5cm] (iterations) {
+    Iteration count, $n < n_{\mathrm{max}}$};
+  \node [block, right of=tolerance, node distance=3.8cm] (soln) {Solution, 
+    $\p_0$};
+  \node [block, right of=iterations, node distance=3.8cm] (conv) {
+    No convergence};
+
+  % Draw edges
+  \path [line] (init) -- (solver);
+  \path [line] (solver) -- (objective);
+  \path [line] (objective) -- (gradient);
+  \path [line] (gradient) -- (tolerance);
+  \path [line] (tolerance) -- node {no} (iterations);
+  \path [line] (iterations) -- node {no} (update);
+  \path [line] (update) -- (solver);
+  \path [line] (tolerance) -- node {yes} (soln);
+  \path [line] (iterations) -- node {yes} (conv);
+  \path [line, dashed] (exp) -- (objective);
+\end{tikzpicture}
+
+\end{document}

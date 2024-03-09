@@ -293,10 +293,8 @@ def initial_guess_at_axis(N=50):
     # p is an empty array, or any entry in p is None, then initialise p.
     # or (type(p) is list and p == []) or (type(p) is np.ndarray
     # and p.size == 0) or if any(p == None):
-    if p is None: 
-        print('Click on the points that will form the initial guess')
-        p = np.array(plt.ginput(N)) # Max of N pts
-    return p
+    print('Click on the points that will form the initial guess')
+    return np.array(plt.ginput(N)) # Max of N pts
 
 
 
@@ -366,7 +364,7 @@ def true_location_width(data, mask=None, p=None, scale_factor=1,
     if p is None:
         p = initial_guess_at_axis()
 
-    s = dist_along_path(p[:,0], p[:,1])
+    s = dist_along_path(*p.T)
 
     
     # Iterate through the selected points, rotating the image through 
@@ -421,7 +419,7 @@ def true_location_width(data, mask=None, p=None, scale_factor=1,
         var_b.append(pcov[-1][-1])
         # Distance from centre of plume to the centre of the row, in
         # rotated coordinates
-        d.append(popt[1] - (N/2)) # COM - (N/2) #
+        d.append(popt[2] - (N//2)) # COM - (N/2) #
         var_d.append(d[-1]**2 * pcov[2][2])
         # Add the distance (i.e. residual) squared to the R2 value
         r2 += d[-1]**2
@@ -449,8 +447,8 @@ def true_location_width(data, mask=None, p=None, scale_factor=1,
             ax01.axhline(M/2)
             
             # Plot the residual as a function of distance along plume axis
-            ax10.plot(s, d[-1], '+', c='C0')
-            ax10.set_title('$r^2$: %.4f' % r2)
+            #ax10.plot(s, d[-1], '+', c='C0')
+            #ax10.set_title('$r^2$: %.4f' % r2)
             
             # Plot the section for the current rotation
             ax11.clear()
@@ -512,6 +510,8 @@ if __name__ == '__main__':
     #with open(path + '20190314_CSS_initGuess.json') as f:
         jsondata = json.load(f)
     p = np.array(jsondata['data'])
+
+    scale_factor = 77.44015387936139
     
     fig, ax = plt.subplots()    
     try:
