@@ -7,6 +7,8 @@ fumarolePlumeModel.aux
 fumarolePlumeModel.log
 fumarolePlumeModel.tex
 fumarolePlumeModel.tex~
+fumarolePlumeModel.pdf
+fumarolePlumeModel.py.*
 fumarolePlumeModel_workflow.tex
 initialConds.npy
 .ipynb_checkpoints/*
@@ -25,3 +27,4 @@ plumeAnalyserSyntheticHorizontal_play.ipynb
 plumeAnalyserSyntheticVertical.*
 plumeAnalyser.tex
 Untitled.ipynb
+__pycache__/*
