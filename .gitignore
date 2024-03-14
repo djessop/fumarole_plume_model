@@ -14,6 +14,9 @@ initialConds.npy
 .ipynb_checkpoints/*
 objFn.npy
 plumeAnalyser.aux
+plumeAnalyser.out
+plumeAnalyser.log
+plumeAnalyser.pdf
 plumeAnalyser-Copy1.ipynb
 plumeAnalyserInversion20190514.ipynb
 plumeAnalyserInversion20190515.ipynb
