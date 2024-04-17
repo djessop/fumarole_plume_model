@@ -349,9 +349,9 @@ def true_location_width(data, mask=None, p=None, scale_factor=1,
 
     Returns
     -------
-    trueLocn : 1D array like
+    true_locn : 1D array like
         The "true" location of the plume centroid
-    plumeWidth : 1D array like
+    plume_width : 1D array like
         The width at location trueLocn[i] and angle theta[i]
 
     See also
@@ -372,7 +372,7 @@ def true_location_width(data, mask=None, p=None, scale_factor=1,
     # at each point.
     h_window_offset = 250
     v_window_offset =   5
-    true_locn, plume_width = [], []
+    true_locn, true_loc_err, plume_width, plume_width_err = [], [], [], []
     r2 = 0.
 
     if plotting:
@@ -416,6 +416,7 @@ def true_location_width(data, mask=None, p=None, scale_factor=1,
         X = np.arange(len(row))
         popt, pcov = curve_fit(gaussian_profile, X, row, p0)
         plume_width.append(popt[-1])
+        plume_width_err.append(np.sqrt(np.diag(pcov[-1])))
         var_b.append(pcov[-1][-1])
         # Distance from centre of plume to the centre of the row, in
         # rotated coordinates

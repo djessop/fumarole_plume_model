@@ -92,10 +92,10 @@ to do:
 from scipy.integrate import ode, solve_ivp
 from scipy.interpolate import interp1d
 from scipy.io.matlab import loadmat
-from bentPlumeAnalyser import (plumeTrajectory,
-                               distAlongPath,
-                               plumeAngle,
-                               trueLocationWidth)
+from bentPlumeAnalyser import (plume_trajectory,
+                               dist_along_path,
+                               plume_angle,
+                               true_location_width)
 
 import numpy as np
 import matplotlib.pyplot as plt

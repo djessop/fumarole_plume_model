@@ -14,6 +14,7 @@ images/*
 initialConds.npy
 .ipynb_checkpoints/*
 objFn.npy
+Model_and_synthdata_inversion_updated.py
 plumeAnalyser.aux
 plumeAnalyser-Copy1.ipynb
 plumeAnalyserInversion20190514.ipynb
