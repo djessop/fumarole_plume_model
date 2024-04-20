@@ -2,10 +2,16 @@
 """
 Created on Fri Nov 24 09:56:16 2023
 
+Modified by D. E. Jessop, 2024-04-16
+
 @author: klein
 """
 
 import numpy as np
+
+from myiapws import iapws1995
+
+Tt = iapws1995.Tt  # Triple point of water
 
 
 def derivs(s, V, ks=0.09, kw=0.9, g=9.81, Ca=1006, Cp0=1885,
@@ -122,7 +128,7 @@ def temperature_fume(s, V, ks=0.09, kw=0.9, g=9.81, Ca=1006, Cp0=1885,
     plume temperature: temperature_fume, as a function of the mass flux, 
     enthalpy flux and specific heat capacity of vapour.
     plume density: density_fume as a function of spec. gas constant of 
-    vapour, Rp, atmospheric pressure and plume temperature T
+        vapour, Rp, atmospheric pressure and plume temperature T
     entrainment velocity as a function of plume velocity U = V[1] / V[0], 
     plume angle theta: V[2], 
     windspeed W
@@ -131,6 +137,56 @@ def temperature_fume(s, V, ks=0.09, kw=0.9, g=9.81, Ca=1006, Cp0=1885,
     Q, _, E, *_ = V
     Cp = heat_capacity(s, V)
     return E / (Q * Cp)  
+
+
+def produce_Gm(sol, s, cutoff=None):
+    """Returns the model predictions in a format suitable for comparison with 
+    data"""
+    rho  = density_fume(sol.t, sol.y)
+    T    = temperature_fume(sol.t, sol.y) - Tt
+    Cp   = heat_capacity(sol.t, sol.y)
+    b    = sol.y[0] / np.sqrt(rho * sol.y[1])
+    u    = sol.y[1] / sol.y[0]
+    theta = sol.y[3]
+    # insert solution into array of large values where soln is valid
+    L = len(sol.t)
+    if L > cutoff:
+        L = cutoff
+    solp  = -9999 * np.ones((3, cutoff))
+    solp[:, :L] = np.array([theta, b, T])
+
+    if cutoff is not None:
+        solp = solp[:,:cutoff]
+    return solp.flatten()
+
+
+def objective_fn(model, data, errors, mode='lstsq'):
+    """Calculate and return the objective (model misfit) function"""
+
+    Gm_d   = model - data
+    if mode != 'lstsq':
+        # errors should be in 1D array form in this case,
+        # apply the absolute value
+        return (-np.abs(Gm_d) * np.sqrt(errors)).sum()
+    Cd_inv = errors.copy()
+    if len(errors.shape) != 2:
+        Cd_inv = np.diag(1/errors**2)
+    return -.5 * Gm_d @ Cd_inv @ Gm_d
+
+
+def parallel_job(u0, R0, T0):
+    warnings.filterwarnings('ignore')
+    V0   = [1, 1, Cp0 * T0, 1, 1, .05]  # required for routines
+    rho0 = density_fume(0, V0)
+    Q0   = rho0 * np.pi * R0**2 * u0
+    M0   = Q0 * u0
+    E0   = Q0 * Cp0 * T0
+    V0   = [Q0, M0, E0, np.pi/2, Pa0, .05]
+
+    sol  = solve_ivp(derivs, [s[0], s[-1]], V0, t_eval=s)
+    Gm   = produce_Gm(sol, s)
+
+    return objective_fn(Gm, d, Cd_inv, mode='lstsq'), V0
 
 
 if __name__ == '__main__':
@@ -149,7 +205,6 @@ if __name__ == '__main__':
     plt.close('all')
 
     # fixed parameters
-    v0   = 10    # definitely don't know what this is
     rho0 = 0.5   # careful, density will vary with temperature!
     Cp0  = 1885  # careful, Cp0 will vary with temperatur!e
     Rp0  = 462   # careful, Rp0 will vary with temperatur!e
@@ -158,43 +213,117 @@ if __name__ == '__main__':
     n0   = 0.05  # Fumarole plumes are always 95% vapour?
     Ta0  = 291   # Tair 2-year average at Sanner
     s    = np.linspace(0, 250, 501)
-    
     # variables
-    Tt = iapws1995.Tt  # Triple point of water
-    R0 = np.linspace(0.1, 1, 11)  # It goes to 11!
-    T0 = np.linspace(80 + Tt, 160 + Tt, 11)
-
+    rho0true = .5
     R0true = .5
     T0true = Tt + 96
-    Q0true = rho0 * v0 * R0true**2 * np.pi
-    M0true = Q0true * v0
+    u0true = 10
+    Q0true = rho0true * u0true * R0true**2 * np.pi
+    M0true = Q0true * u0true
     E0true = Q0true * Cp0 * T0true
     V0true = [Q0true, M0true, E0true, theta0, Pa0, n0]
  
     sol_true = solve_ivp(derivs, [s[0], s[-1]], V0true, t_eval=s)
 
     cm = 1/2.54
-    fig0, ax0 = plt.subplots(figsize=(8*cm, 8*cm))
-    ax0.plot(sol_true.y.T, sol_true.t, '-')
-    ax0.set_xlabel('Plume parameters')
-    ax0.set_ylabel(r'Distance along plume axis, $s$')
-    ax0.legend((r'$Q$', r'$M$', r'$E$', r'$\theta$', r'$P_a$', r'$n$'))
 
+    # Produce "true" data values
     sol  = sol_true
     rho  = density_fume(sol.t, sol.y)
     T    = temperature_fume(sol.t, sol.y) - Tt
     Cp   = heat_capacity(sol.t, sol.y)
     b    = sol.y[0] / np.sqrt(rho * sol.y[1])
-    u    = sol.y[1] / sol.y[0] 
-    solp = np.array([b, u, T])
-    fig1, ax1 = plt.subplots(figsize=(8*cm, 8*cm))
-    ax1.plot(solp.T, sol.t, '-')
-    ax1.set_xlabel('Plume parameters')
-    ax1.set_ylabel(r'Distance along plume axis, $s$')
-    ax1.legend((r'$b$', r'$u$', r'$T$'))
+    u    = sol.y[1] / sol.y[0]
+    theta = sol.y[3]
+    
+    sigtheta, sigb, sigT = np.pi / 20, .5, .5  # rad, m and K
+    Cd_inv = np.diag(np.array([1 / sigtheta**2 * np.ones_like(theta),
+                               1 / sigb**2 * np.ones_like(b),
+                               1 / sigT**2 * np.ones_like(T)]).ravel())
 
-    # #empty dictionaries and lists
-    # varlist = [(t0,r0) for (t0,r0) in product(T0, R0)]
+    solp = np.array([theta, b, T])
+    noise = np.random.randn(*solp.shape)  # Gaussian noise, _N_(0,1)
+    sol_noise = (solp.T + noise.T * (sigtheta, sigb, sigT)).T
+    d    = sol_noise.flatten()  # array of data
+    Gm   = produce_Gm(sol)
+    Gm_d = Gm - d
+    
+    fig0, ax0 = plt.subplots(figsize=(10*cm, 10*cm))
+    ax0.plot(solp.T, s, '-')
+    ax0.set_xlabel('Plume parameters')
+    ax0.set_ylabel(r'Distance along plume axis, $s$')
+    ax0.legend((r'$\theta$', r'$b$', r'$T$'))
+
+    plt.gca().set_prop_cycle(None)  # reset colour cycle
+    ax0.plot(sol_noise.T, s, '.')
+
+    fig0.tight_layout()
+    
+    E = np.exp(objective_fn(Gm, d, Cd_inv))
+    print(f'Value of objective function: {E}')
+    
+    ## Run jobs in parallel in order to calculate objective function at
+    ## each combination of possible source values
+    from joblib import Parallel, delayed
+
+    import time
+    import warnings
+
+    njobs = 16
+    ngrid = 51  # Number of grid points
+
+    R0 = np.linspace(0.1, 1, ngrid)  
+    T0 = np.linspace(80 + Tt, 160 + Tt, ngrid)
+    u0 = np.linspace(0.1, 100, ngrid)
+
+    t = time.time()
+    sequence = [u0, R0, T0]
+    results = Parallel(n_jobs=njobs)(delayed(parallel_job)(u0, R0, T0) 
+                                     for (u0,R0,T0) in list(product(*sequence)))
+    print("Job ran in %.3f s" % (time.time() - t))
+
+    ## Deal out the results so as to 
+    objFn, initialConds = [], []
+
+    for result in results:
+        objFn.append(result[0])
+        initialConds.append(result[1])
+
+    initialConds = np.array(initialConds)
+    objFn = np.array(objFn).reshape((-1, nGrid))
+               
+    # #empty list for storing objective fn
+    # objFn = []
+    # for (T0_,R0_) in product(T0, R0):
+    #     V0   = [1, 1, Cp0 * T0_, np.pi, Pa0, .05]  # required for routines
+    #     rho0 = density_fume(0, V0)
+    #     Q0   = rho0 * np.pi * R0_**2 * v0
+    #     M0   = Q0 * v0
+    #     E0   = Q0 * Cp0 * T0_
+    #     V0   = [Q0, M0, E0, np.pi, Pa0, .05]
+
+    #     sol  = solve_ivp(derivs, [s[0], s[-1]], V0, t_eval=s)
+        
+    #     Gm   = produce_Gm(sol)
+        
+    #     Gm_d = Gm - d
+    #     objFn.append(objective_fn(Gm, d, sigma, mode='lstsq'))
+
+    # objFn = np.array(objFn).reshape((-1, N))
+
+    fig, ax = plt.subplots(figsize=(10*cm, 10*cm))
+    ax.pcolor(R0, T0, objFn, label='objective function')
+    ax.plot(R0true, T0true, 'wo', label='true conditions')
+    # argmax gives element number.  To convert to row number, do Euclidian
+    # division wrt N and take modulo N for columns.
+    R0opt, T0opt = R0[objFn.argmax() % N], T0[objFn.argmax() // N]
+    ax.plot(R0opt, T0opt, 'ko', label='opt. conditions')
+    
+    ax.set_xlabel(r'Vent radius, $R_0/$[m]')
+    ax.set_ylabel(r'Vent temperature, $T_0$/[K]')
+
+    ax.legend()
+
     # m = {} 
     # d = {}
     # E = []
