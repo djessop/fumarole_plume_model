@@ -153,7 +153,9 @@ def produce_Gm(sol, s, cutoff=None):
     if L > cutoff:
         L = cutoff
     solp  = -9999 * np.ones((3, cutoff))
-    solp[:, :L] = np.array([theta, b, T])
+    solp[:, :L] = np.array([theta[:L],
+                            b[:L],
+                            T[:L]])
 
     if cutoff is not None:
         solp = solp[:,:cutoff]

@@ -17,8 +17,8 @@ objFn.npy
 Model_and_synthdata_inversion_updated.py
 plumeAnalyser.aux
 plumeAnalyser-Copy1.ipynb
-plumeAnalyserInversion20190514.ipynb
-plumeAnalyserInversion20190515.ipynb
+plumeAnalyserInversion20190514*.ipynb
+plumeAnalyserInversion20190515*.ipynb
 plumeAnalyserInversionbase.ipynb
 plumeAnalyser.ipynb
 plumeAnalyser.log
@@ -33,3 +33,4 @@ plumeAnalyserSyntheticVertical.*
 plumeAnalyser.tex
 __pycache__/*
 Untitled.ipynb
+#Woodhouse_model_inversion.ipynb
