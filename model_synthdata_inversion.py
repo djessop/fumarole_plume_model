@@ -139,7 +139,7 @@ def temperature_fume(s, V, ks=0.09, kw=0.9, g=9.81, Ca=1006, Cp0=1885,
     return E / (Q * Cp)  
 
 
-def produce_Gm(sol, s, cutoff=None):
+def produce_Gm(sol, cutoff=None):
     """Returns the model predictions in a format suitable for comparison with 
     data"""
     rho  = density_fume(sol.t, sol.y)
@@ -150,9 +150,9 @@ def produce_Gm(sol, s, cutoff=None):
     theta = sol.y[3]
     # insert solution into array of large values where soln is valid
     L = len(sol.t)
-    if L > cutoff:
+    if (cutoff is not None) and (L > cutoff):
         L = cutoff
-    solp  = -9999 * np.ones((3, cutoff))
+    solp  = -9999 * np.ones((3, L))
     solp[:, :L] = np.array([theta[:L],
                             b[:L],
                             T[:L]])
@@ -177,6 +177,7 @@ def objective_fn(model, data, errors, mode='lstsq'):
 
 
 def parallel_job(u0, R0, T0):
+    # errors/Cd_inv are not passed explicitly as arguements
     warnings.filterwarnings('ignore')
     V0   = [1, 1, Cp0 * T0, 1, 1, .05]  # required for routines
     rho0 = density_fume(0, V0)
@@ -210,7 +211,7 @@ if __name__ == '__main__':
     rho0 = 0.5   # careful, density will vary with temperature!
     Cp0  = 1885  # careful, Cp0 will vary with temperatur!e
     Rp0  = 462   # careful, Rp0 will vary with temperatur!e
-    Pa0  = 86000 # Atmospheric pressure at altitude of la Soufrière
+    Pa0  = 86000 # Atmospheric pressure at altitude of la Soufriere
     theta0 = np.pi/2
     n0   = 0.05  # Fumarole plumes are always 95% vapour?
     Ta0  = 291   # Tair 2-year average at Sanner
