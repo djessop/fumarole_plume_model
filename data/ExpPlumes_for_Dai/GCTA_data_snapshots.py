@@ -11,7 +11,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
+scale_factor = 38.               # Conversion factor/[pix/cm]
+
+
 if __name__ == '__main__':
+    plt.close('all')
     cols, rows = 7, 4
     fig, axes = plt.subplots(ncols=cols, nrows=rows, 
                              sharex=True, sharey=True, 
@@ -22,12 +26,14 @@ if __name__ == '__main__':
     ind = 0
 
     for exptNo in range(1, 33):
-        path  = './exp%02d/' % exptNo
+        root = '/home/david/Modelling/fumarolePlumeModel/' \
+            + 'data/ExpPlumes_for_Dai/'
+        path = root + './exp%02d/' % exptNo
         try:
-            ax, im, data, xexp, zexp, extent, Orig = openPlotExptImage(path,
-                                                                       axes,
-                                                                       exptNo,
-                                                                       ind)
+            (ax, im, data,
+             xexp, zexp, extent, Orig) = open_plot_expt_image(path, axes,
+                                                              exptNo, ind,
+                                                              scale_factor)
             Ox, Oz = Orig
             ind += 1                # Only update axes index if expt exits
         

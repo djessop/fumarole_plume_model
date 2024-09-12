@@ -162,18 +162,31 @@ def produce_Gm(sol, cutoff=None):
     return solp.flatten()
 
 
-def objective_fn(model, data, errors, mode='lstsq'):
+def objective_fn(model, data, errors, mode='leastsq', exponentiate=False):
     """Calculate and return the objective (model misfit) function"""
 
     Gm_d   = model - data
-    if mode != 'lstsq':
+    errors = np.array(errors)
+    if mode != 'abs' and mode != 'leastsq':
+        raise TypeError('Unknown mode: should be either "abs" or "leastsq"')
+    
+    # Laplacian distributed erros - absolute value of model - data
+    if mode == 'abs':
         # errors should be in 1D array form in this case,
+        if len(errors.shape) == 2:
+            errors = np.diag(errors)
         # apply the absolute value
-        return (-np.abs(Gm_d) * np.sqrt(errors)).sum()
-    Cd_inv = errors.copy()
-    if len(errors.shape) != 2:
-        Cd_inv = np.diag(1/errors**2)
-    return -.5 * Gm_d @ Cd_inv @ Gm_d
+        S = (-np.abs(Gm_d) * np.sqrt(errors)).sum()
+
+    # Gaussian distributed errors
+    if mode == 'leastsq':
+        if len(errors.shape) != 2:
+            errors = np.diag(1/errors**2)
+        S = -.5 * Gm_d @ errors @ Gm_d
+
+    if not exponentiate:
+        return S
+    return 1 - np.exp(S)
 
 
 def parallel_job(u0, R0, T0):
@@ -198,7 +211,7 @@ if __name__ == '__main__':
     from matplotlib import pyplot as plt
     #from mpl_toolkits import mplot3d
     from scipy.integrate import solve_ivp
-    from scipy.optimize import fmin
+    from scipy.optimize import fmin, minimize
 
     import pandas as pd
     """
@@ -215,7 +228,7 @@ if __name__ == '__main__':
     theta0 = np.pi/2
     n0   = 0.05  # Fumarole plumes are always 95% vapour?
     Ta0  = 291   # Tair 2-year average at Sanner
-    s    = np.linspace(0, 250, 501)
+    s    = np.linspace(0, 200, 201)
     # variables
     rho0true = .5
     R0true = .5
@@ -239,7 +252,7 @@ if __name__ == '__main__':
     u    = sol.y[1] / sol.y[0]
     theta = sol.y[3]
     
-    sigtheta, sigb, sigT = np.pi / 20, .5, .5  # rad, m and K
+    sigtheta, sigb, sigT = np.pi / 10, .5, 1  # rad, m and K
     Cd_inv = np.diag(np.array([1 / sigtheta**2 * np.ones_like(theta),
                                1 / sigb**2 * np.ones_like(b),
                                1 / sigT**2 * np.ones_like(T)]).ravel())
@@ -262,8 +275,8 @@ if __name__ == '__main__':
 
     fig0.tight_layout()
     
-    E = np.exp(objective_fn(Gm, d, Cd_inv))
-    print(f'Value of objective function: {E}')
+    S = objective_fn(Gm, d, Cd_inv, 'leastsq', False)
+    print(f'Value of misfit function: {S}')
     
     ## Run jobs in parallel in order to calculate objective function at
     ## each combination of possible source values

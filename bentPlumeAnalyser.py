@@ -69,7 +69,7 @@ def centroid_posn(x, y, n=2):
     return (x * y**n).sum() / (y**n).sum()
 
 
-def plume_trajectory(image, n=2, theta=np.pi/2):
+def plume_trajectory(image, n=2, theta=np.pi/2, scale_factor=1):
     """
     Locate the "centre of mass" and spread of a plume, following [1]
 
@@ -81,6 +81,8 @@ def plume_trajectory(image, n=2, theta=np.pi/2):
         Exponent to which rows and cols are raised, default is 2.
     theta : float
         Initial plume angle.  Default is np.pi / 2 (starts vertically)
+    scale_factor : float
+        Scaling between pixels and real-world units.  Default is 1.
 
     Returns
     -------
@@ -168,8 +170,8 @@ def show_scaled_image(image, scale_factor=1., vent_loc=None,
         Ox, Oz = vent_loc
     
     extentInPix = np.array([0, image.shape[1], 0, image.shape[0]])
-    extent = np.array([(extentInPix[:2] - Ox)/scale_factor,
-                       (extentInPix[2:] - Oz)[::-1]/scale_factor]).flatten()
+    extent = np.array([(extentInPix[:2] - Ox) / scale_factor,
+                       (extentInPix[2:] - Oz)[::-1] / scale_factor]).flatten()
     
     if ax is None:
         fig, ax = plt.subplots()
@@ -201,17 +203,17 @@ def open_plot_expt_image(path, axes, scale_factor=1., exptNo=1,
     # of 38 pixels to 1 cm.  There's probably some neater and more pythonic
     # way of calculating the world extent list but at least it works as is.
     extentInPix = [0, data.shape[1], 0, data.shape[0]]
-    extent = np.array([(extentInPix[:2] - Ox)/scale_factor,
-                       (Oz - extentInPix[2:])/scale_factor]).flatten().tolist()
+    extent = np.array([(extentInPix[:2] - Ox) / scale_factor,
+                       (Oz - extentInPix[2:]) / scale_factor]).flatten().tolist()
     xexp = (xexp - Ox) / scale_factor
     zexp = (Oz - zexp) / scale_factor
 
-    xbar, zbar, x0 = plume_trajectory(data)
+    xbar, zbar, x0 = plume_trajectory(data, 2, np.pi/2, scale_factor)
 
-    if len(axes) > 1 and ind is not None:
+    if ind is not None and len(axes) > 1:
         ax = axes[ind]
     else:
-        ax = plt.gca()
+        ax = plt.gca() 
 
     im = ax.imshow(data, extent=extent, cmap=plt.cm.magma, zorder=0)
     ax.invert_yaxis()
@@ -393,7 +395,7 @@ def true_location_width(data, mask=None, p=None, scale_factor=1,
     # Loop through the locations in p, rotating the image as required and
     # obtaining the maximum intensity and the half width of the plume
     # "section" at each location from a Gaussian fit.
-    theta, sig_theta = plume_angle(*p.T, errors=[1/scale_factor]*2)
+    theta, sig_theta = plume_angle(*p.T, errors=[1 / scale_factor]*2)
 
     # Lists for the var iance of b and d (from covariance matrix)
     var_b, var_d, d = [], [], []

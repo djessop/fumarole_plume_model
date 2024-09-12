@@ -66,7 +66,7 @@ if __name__ == "__main__":
     # Display image
     ax0.imshow(img, cmap=plt.cm.gray)
     ax0.set_axis_off()
-    ax0.set_adjustable('box-forced')
+    ax0.set_adjustable('box')
 
     # Display histogram
     ax1.hist(img.ravel(), bins=bins, histtype='step', color='black')
