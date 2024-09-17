@@ -139,7 +139,7 @@ def temperature_fume(s, V, ks=0.09, kw=0.9, g=9.81, Ca=1006, Cp0=1885,
     return E / (Q * Cp)  
 
 
-def produce_Gm(sol, cutoff=None):
+def produce_Gm(s, sol):
     """Returns the model predictions in a format suitable for comparison with 
     data"""
     rho  = density_fume(sol.t, sol.y)
@@ -149,16 +149,14 @@ def produce_Gm(sol, cutoff=None):
     u    = sol.y[1] / sol.y[0]
     theta = sol.y[3]
     # insert solution into array of large values where soln is valid
-    L = len(sol.t)
-    if (cutoff is not None) and (L > cutoff):
-        L = cutoff
-    solp  = -9999 * np.ones((3, L))
-    solp[:, :L] = np.array([theta[:L],
-                            b[:L],
-                            T[:L]])
 
-    if cutoff is not None:
-        solp = solp[:,:cutoff]
+    L = len(s)
+    Lsol  = len(sol.t)
+    solp  = -9999 * np.ones((3, L))
+    solp[:, :Lsol] = np.array([theta[:Lsol],
+                               b[:Lsol],
+                               T[:Lsol]])
+
     return solp.flatten()
 
 
@@ -167,7 +165,7 @@ def objective_fn(model, data, errors, mode='leastsq', exponentiate=False):
 
     Gm_d   = model - data
     errors = np.array(errors)
-    if mode != 'abs' and mode != 'leastsq':
+    if mode != 'abs' and mode != 'leastsq' and mode != 'lstsq':
         raise TypeError('Unknown mode: should be either "abs" or "leastsq"')
     
     # Laplacian distributed erros - absolute value of model - data
@@ -176,31 +174,37 @@ def objective_fn(model, data, errors, mode='leastsq', exponentiate=False):
         if len(errors.shape) == 2:
             errors = np.diag(errors)
         # apply the absolute value
-        S = (-np.abs(Gm_d) * np.sqrt(errors)).sum()
+        S = (np.abs(Gm_d) * np.sqrt(errors)).sum()
 
     # Gaussian distributed errors
-    if mode == 'leastsq':
+    if mode == 'leastsq' or mode == 'lstsq':
         if len(errors.shape) != 2:
             errors = np.diag(1/errors**2)
-        S = -.5 * Gm_d @ errors @ Gm_d
+        S = .5 * Gm_d @ errors @ Gm_d
 
     if not exponentiate:
         return S
-    return 1 - np.exp(S)
+    return 1 - np.exp(-S)
 
 
-def parallel_job(u0, R0, T0):
+def parallel_job(U0, R0, T0, s, d, Cd_inv): 
+    import warnings
+    from scipy.integrate import solve_ivp
+
     # errors/Cd_inv are not passed explicitly as arguements
     warnings.filterwarnings('ignore')
-    V0   = [1, 1, Cp0 * T0, 1, 1, .05]  # required for routines
+    n0   = .05
+    Cp0  = heat_capacity(0, [0, 0, 0, 0, 0, n0])
+    Pa0  = 86000
+    V0   = [1, 1, Cp0 * T0, 1, Pa0, n0]  # required for routines
     rho0 = density_fume(0, V0)
-    Q0   = rho0 * np.pi * R0**2 * u0
-    M0   = Q0 * u0
+    Q0   = rho0 * np.pi * R0**2 * U0
+    M0   = Q0 * U0
     E0   = Q0 * Cp0 * T0
     V0   = [Q0, M0, E0, np.pi/2, Pa0, .05]
 
     sol  = solve_ivp(derivs, [s[0], s[-1]], V0, t_eval=s)
-    Gm   = produce_Gm(sol, s)
+    Gm   = produce_Gm(s, sol)
 
     return objective_fn(Gm, d, Cd_inv, mode='lstsq'), V0
 
@@ -209,11 +213,35 @@ if __name__ == '__main__':
     from itertools import product
     from myiapws import iapws1992, iapws1995
     from matplotlib import pyplot as plt
+    from matplotlib.colors import LogNorm
     #from mpl_toolkits import mplot3d
     from scipy.integrate import solve_ivp
-    from scipy.optimize import fmin, minimize
+    from scipy.optimize import minimize
+    from joblib import Parallel, delayed
+    from IPython.display import IFrame
+    from functools import partial
 
+    import time
     import pandas as pd
+    import plotly.graph_objects as go
+
+
+    ## Helper functions for plotting
+    def get_the_slice(x,y,z, surfacecolor):
+        return go.Surface(x=x,
+                          y=y,
+                          z=z,
+                          surfacecolor=surfacecolor,
+                          coloraxis='coloraxis')
+
+    def get_lims_colors(surfacecolor):# color limits for a slice
+        return np.min(surfacecolor), np.max(surfacecolor)
+
+
+    def colorax(vmin, vmax):
+        return dict(cmin=vmin,
+                    cmax=vmax)
+
     """
     Solve differential equations for a set of initial values Q0, M0, theta0, 
     E0, Pa0, n0
@@ -221,6 +249,7 @@ if __name__ == '__main__':
     plt.close('all')
 
     # fixed parameters
+    npts = 101
     rho0 = 0.5   # careful, density will vary with temperature!
     Cp0  = 1885  # careful, Cp0 will vary with temperatur!e
     Rp0  = 462   # careful, Rp0 will vary with temperatur!e
@@ -228,14 +257,14 @@ if __name__ == '__main__':
     theta0 = np.pi/2
     n0   = 0.05  # Fumarole plumes are always 95% vapour?
     Ta0  = 291   # Tair 2-year average at Sanner
-    s    = np.linspace(0, 200, 201)
+    s    = np.linspace(0, 100, npts)
     # variables
     rho0true = .5
     R0true = .5
     T0true = Tt + 96
-    u0true = 10
-    Q0true = rho0true * u0true * R0true**2 * np.pi
-    M0true = Q0true * u0true
+    U0true = 10
+    Q0true = rho0true * U0true * R0true**2 * np.pi
+    M0true = Q0true * U0true
     E0true = Q0true * Cp0 * T0true
     V0true = [Q0true, M0true, E0true, theta0, Pa0, n0]
  
@@ -251,8 +280,10 @@ if __name__ == '__main__':
     b    = sol.y[0] / np.sqrt(rho * sol.y[1])
     u    = sol.y[1] / sol.y[0]
     theta = sol.y[3]
-    
-    sigtheta, sigb, sigT = np.pi / 10, .5, 1  # rad, m and K
+
+    noise_level = 1
+    sigtheta, sigb, sigT = (np.pi / 10 * noise_level,
+                            .5 * noise_level, 1 * noise_level)  # rad, m and K
     Cd_inv = np.diag(np.array([1 / sigtheta**2 * np.ones_like(theta),
                                1 / sigb**2 * np.ones_like(b),
                                1 / sigT**2 * np.ones_like(T)]).ravel())
@@ -261,7 +292,7 @@ if __name__ == '__main__':
     noise = np.random.randn(*solp.shape)  # Gaussian noise, _N_(0,1)
     sol_noise = (solp.T + noise.T * (sigtheta, sigb, sigT)).T
     d    = sol_noise.flatten()  # array of data
-    Gm   = produce_Gm(sol)
+    Gm   = produce_Gm(s, sol)
     Gm_d = Gm - d
     
     fig0, ax0 = plt.subplots(figsize=(10*cm, 10*cm))
@@ -275,142 +306,128 @@ if __name__ == '__main__':
 
     fig0.tight_layout()
     
-    S = objective_fn(Gm, d, Cd_inv, 'leastsq', False)
-    print(f'Value of misfit function: {S}')
+    # S = objective_fn(Gm, d, Cd_inv, 'leastsq', False)
+    # print(f'Value of misfit function: {S}')
     
-    ## Run jobs in parallel in order to calculate objective function at
-    ## each combination of possible source values
-    from joblib import Parallel, delayed
 
-    import time
-    import warnings
+    # """
+    # Run jobs in parallel in order to calculate objective function at
+    # each combination of possible source values.
+    # """
+    # njobs = 8
+    # ngrid = 51  # Number of grid points
 
-    njobs = 16
-    ngrid = 51  # Number of grid points
+    # R0 = np.linspace(0.1, 1, ngrid)  
+    # T0 = np.linspace(80 + Tt, 160 + Tt, ngrid)
+    # U0 = np.linspace(0.1, 100, ngrid)
 
-    R0 = np.linspace(0.1, 1, ngrid)  
-    T0 = np.linspace(80 + Tt, 160 + Tt, ngrid)
-    u0 = np.linspace(0.1, 100, ngrid)
+    # # "wrapper" partial function to simplify notation below
+    # pj = partial(parallel_job, s=s, d=d, Cd_inv=Cd_inv)
+    # t  = time.perf_counter()
+    # sequence = [U0, R0, T0]
+    # results = Parallel(n_jobs=njobs)(delayed(pj)(u0, r0, t0) for (
+    #     u0, r0, t0) in list(product(*sequence)))
+    
+    # print("Job ran in %.3f s using %2d processors" % (
+    #     time.perf_counter() - t, njobs))
 
-    t = time.time()
-    sequence = [u0, R0, T0]
-    results = Parallel(n_jobs=njobs)(delayed(parallel_job)(u0, R0, T0) 
-                                     for (u0,R0,T0) in list(product(*sequence)))
-    print("Job ran in %.3f s" % (time.time() - t))
+    # ## Deal out the results
+    # objFn, initialConds = [], []
 
-    ## Deal out the results so as to 
-    objFn, initialConds = [], []
+    # for result in results:
+    #     objFn.append(result[0])
+    #     initialConds.append(result[1])
 
-    for result in results:
-        objFn.append(result[0])
-        initialConds.append(result[1])
-
-    initialConds = np.array(initialConds)
-    objFn = np.array(objFn).reshape((-1, nGrid))
+    # initialConds = np.array(initialConds)
+    # objFn = np.array(objFn).reshape((-1, ngrid, ngrid))
                
-    # #empty list for storing objective fn
-    # objFn = []
-    # for (T0_,R0_) in product(T0, R0):
-    #     V0   = [1, 1, Cp0 * T0_, np.pi, Pa0, .05]  # required for routines
-    #     rho0 = density_fume(0, V0)
-    #     Q0   = rho0 * np.pi * R0_**2 * v0
-    #     M0   = Q0 * v0
-    #     E0   = Q0 * Cp0 * T0_
-    #     V0   = [Q0, M0, E0, np.pi, Pa0, .05]
+    # # res   = minimize(
 
-    #     sol  = solve_ivp(derivs, [s[0], s[-1]], V0, t_eval=s)
-        
-    #     Gm   = produce_Gm(sol)
-        
-    #     Gm_d = Gm - d
-    #     objFn.append(objective_fn(Gm, d, sigma, mode='lstsq'))
-
-    # objFn = np.array(objFn).reshape((-1, N))
-
-    fig, ax = plt.subplots(figsize=(10*cm, 10*cm))
-    ax.pcolor(R0, T0, objFn, label='objective function')
-    ax.plot(R0true, T0true, 'wo', label='true conditions')
-    # argmax gives element number.  To convert to row number, do Euclidian
-    # division wrt N and take modulo N for columns.
-    R0opt, T0opt = R0[objFn.argmax() % N], T0[objFn.argmax() // N]
-    ax.plot(R0opt, T0opt, 'ko', label='opt. conditions')
+    # fig, ax = plt.subplots(figsize=(10*cm, 10*cm))
+    # im = ax.pcolor(T0, R0, np.exp(-objFn[5]), norm=LogNorm(),
+    #                label='objective function')
+    # ax.plot(T0true, R0true, 'wo', label='true conditions')
+    # # argmax gives element number.  To convert to row number, do Euclidian
+    # # division wrt N and take modulo N for columns.
+    # Uopt_ind, Topt_ind, Ropt_ind = np.where(objFn == objFn.min())
+    # ax.plot(T0[Topt_ind], R0[Ropt_ind], 'ko', label='opt. conditions')
     
-    ax.set_xlabel(r'Vent radius, $R_0/$[m]')
-    ax.set_ylabel(r'Vent temperature, $T_0$/[K]')
+    # ax.set_xlabel(r'Vent radius, $R_0/$[m]')
+    # ax.set_ylabel(r'Vent temperature, $T_0$/[K]')
 
-    ax.legend()
+    # ax.legend()
 
-    # m = {} 
-    # d = {}
-    # E = []
+    # # m = {} 
+    # # d = {}
+    # # E = []
 
-    # #get all possible combinations of initial conditions
-    # for var in varlist:
-    #     t0 = var[0]
-    #     r0 = var[1]
-    #     Q0 = rho0 * v0 * r0**2 * np.pi
-    #     M0 = Q0 * v0
-    #     E0 = Q0 * Cp0 * t0
+    # # #get all possible combinations of initial conditions
+    # # for var in varlist:
+    # #     t0 = var[0]
+    # #     r0 = var[1]
+    # #     Q0 = rho0 * v0 * r0**2 * np.pi
+    # #     M0 = Q0 * v0
+    # #     E0 = Q0 * Cp0 * t0
         
-    #     V0 = [Q0, M0, E0, theta0, Pa0, n0]
+    # #     V0 = [Q0, M0, E0, theta0, Pa0, n0]
         
-    #     s = np.linspace(0, 50, 101)
-    #     sol = solve_ivp(derivs, [s[0], s[-1]], V0, t_eval=s)
+    # #     s = np.linspace(0, 50, npts)
+    # #     sol = solve_ivp(derivs, [s[0], s[-1]], V0, t_eval=s)
         
-    #     # out = [sol.t, sol.y[0], sol.y[1], sol.y[2],
-    #     #        sol.y[3], sol.y[4], sol.y[5]]
-    #     # m_out[var] = pd.DataFrame(out, index =['s', 'Q', 'M', 'theta',
-    #     #                                        'E', 'Pa', 'n'])
+    # #     # out = [sol.t, sol.y[0], sol.y[1], sol.y[2],
+    # #     #        sol.y[3], sol.y[4], sol.y[5]]
+    # #     # m_out[var] = pd.DataFrame(out, index =['s', 'Q', 'M', 'theta',
+    # #     #                                        'E', 'Pa', 'n'])
         
-    #     """
-    #     Transform model output into "useful" variables
+    # #     """
+    # #     Transform model output into "useful" variables
 
-    #     plume temperature T=E/(Q cp)
-    #     plume density: density_fume(T)
-    #     plume velocity U=M/Q
-    #     plume radius R=Q/(sqrt(rho M))
-    #     plume angle theta
-    #     plume height z
-    #     """
+    # #     plume temperature T=E/(Q cp)
+    # #     plume density: density_fume(T)
+    # #     plume velocity U=M/Q
+    # #     plume radius R=Q/(sqrt(rho M))
+    # #     plume angle theta
+    # #     plume height z
+    # #     """
 
-    #     T     = temperature_fume(sol.t, sol.y)
-    #     rho   = density_fume(sol.t, sol.y)
-    #     U     = sol.y[1] / sol.y[0]
-    #     R     = sol.y[0] / np.sqrt(rho * sol.y[1]) 
-    #     theta = sol.y[3]
-    #     z     = sol.t*np.sin(theta)
+    # #     T     = temperature_fume(sol.t, sol.y)
+    # #     rho   = density_fume(sol.t, sol.y)
+    # #     U     = sol.y[1] / sol.y[0]
+    # #     R     = sol.y[0] / np.sqrt(rho * sol.y[1]) 
+    # #     theta = sol.y[3]
+    # #     z     = sol.t*np.sin(theta)
         
-    #     # m[var] = pd.DataFrame([s, T, R, z, U, rho, theta, n],
-    #     #                       index =['s', 'T', 'R', 'z', 'U',
-    #     #                               'rho', 'theta', 'n'])
-    #     m[var] = pd.DataFrame([T, R, theta], index =['T', 'R', 'theta'])
+    # #     # m[var] = pd.DataFrame([s, T, R, z, U, rho, theta, n],
+    # #     #                       index =['s', 'T', 'R', 'z', 'U',
+    # #     #                               'rho', 'theta', 'n'])
+    # #     m[var] = pd.DataFrame([T, R, theta], index =['T', 'R', 'theta'])
         
-    #     #add noise
-    #     noise_perc = 0.1
-    #     T_noised = T + (np.random.normal(0, T.std(), len(T)) * noise_perc)
-    #     R_noised = R + (np.random.normal(0, R.std(), len(R)) * noise_perc)
-    #     theta_noised = theta + (
-    #         np.random.normal(0, theta.std(), len(theta)) * noise_perc)
+    # #     #add noise
+    # #     noise_perc = 0.1
+    # #     T_noised = T + (np.random.normal(0, T.std(), len(T)) * noise_perc)
+    # #     R_noised = R + (np.random.normal(0, R.std(), len(R)) * noise_perc)
+    # #     theta_noised = theta + (
+    # #         np.random.normal(0, theta.std(), len(theta)) * noise_perc)
         
-    #     d[var] = pd.DataFrame([T_noised, R_noised, theta_noised],
-    #                           index =['T', 'R', 'theta'])
+    # #     d[var] = pd.DataFrame([T_noised, R_noised, theta_noised],
+    # #                           index =['T', 'R', 'theta'])
         
-    #     # Calculate error between model and synthetc data:
-    #     E_T = (abs(T-T_noised))/T.std()
-    #     E_R = (abs(R-R_noised))/R.std()
-    #     E_theta = (abs(theta-theta_noised))/theta.std()
+    # #     # Calculate error between model and synthetc data:
+    # #     E_T = (abs(T-T_noised))/T.std()
+    # #     E_R = (abs(R-R_noised))/R.std()
+    # #     E_theta = (abs(theta-theta_noised))/theta.std()
         
-    #     E_sum = E_T.sum() + E_R.sum() + E_theta.sum()
-    #     E.append(E_sum)  # list with absolute error for each of the starting
-    #                      # conditions
+    # #     E_sum = E_T.sum() + E_R.sum() + E_theta.sum()
+    # #     E.append(E_sum)  # list with absolute error for each of the starting
+    # #                      # conditions
         
 
-    # t0, r0 = zip(*varlist)
-    # size = [1.2**n for n in E]
+    # # t0, r0 = zip(*varlist)
+    # # size = [1.2**n for n in E]
 
-    # fig1, ax = plt.subplots()    
-    # cs = ax.scatter(t0, r0, s=size, c=E, cmap='viridis')  #c=colors, alpha=0.5
-    # ax.set_xlabel('T0', fontsize=12)
-    # ax.set_ylabel('R0', fontsize=12)
-    # cbar = plt.colorbar(cs)
-    # plt.show() 
+    # # fig1, ax = plt.subplots()    
+    # # cs = ax.scatter(t0, r0, s=size, c=E, cmap='viridis')  #c=colors, alpha=0.5
+    # # ax.set_xlabel('T0', fontsize=12)
+    # # ax.set_ylabel('R0', fontsize=12)
+    # # cbar = plt.colorbar(cs)
+    # # plt.show() 
