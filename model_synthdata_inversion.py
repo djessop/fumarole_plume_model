@@ -7,14 +7,28 @@ Modified by D. E. Jessop, 2024-04-16
 @author: klein
 """
 
-import numpy as np
+from itertools import product
+from myiapws import iapws1992, iapws1995
+from matplotlib import pyplot as plt
+from matplotlib.colors import LogNorm
+#from mpl_toolkits import mplot3d
+from scipy.integrate import solve_ivp
+from scipy.optimize import minimize
+from joblib import Parallel, delayed
+#from IPython.display import IFrame
+from functools import partial
 
-from myiapws import iapws1995
+import numpy as np
+import time
+#import pandas as pd
+#import plotly.graph_objects as go
+
 
 Tt = iapws1995.Tt  # Triple point of water
+cm = 1/2.54
 
 
-def derivs(s, V, ks=0.09, kw=0.9, g=9.81, Ca=1006, Cp0=1885,
+def derivs(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
            Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05):
     #Ca 1001 J/kg/K, Cp water vapour at 95 C 1880 J/kg/K:
     #https://www.engineeringtoolbox.com/water-vapor-d_979.html
@@ -56,14 +70,14 @@ def derivs(s, V, ks=0.09, kw=0.9, g=9.81, Ca=1006, Cp0=1885,
     return np.array([dQ, dM, dE, dth, dPa, dn])
 
 
-def entrainment_vel(s, V, ks=0.09, kw=0.9, g=9.81, Ca=1006, Cp0=1885,
+def entrainment_vel(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
                     Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05):
     W  = wind_profile(s, V)
     Q, M, _, th, _, _ = V  # Don't need E, Pa, n
     return ks * np.abs(M / Q - W * np.cos(th)) + kw * np.abs(W * np.sin(th))
 
     
-def wind_profile(s, V, ks=0.09, kw=0.9, g=9.81, Ca=1006, Cp0=1885,
+def wind_profile(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
                  Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05, W1=5, H1=5):
     """
     Define atmospheric properties:
@@ -76,17 +90,17 @@ def wind_profile(s, V, ks=0.09, kw=0.9, g=9.81, Ca=1006, Cp0=1885,
     theta = V[3]
     z = s * np.sin(theta)
     # constant wind shear, 0 m/s at ground up to W1    
-    return 0.01 * np.ones_like(s)  # np.where(z < H1, W1 * z / H1, W1) 
+    return 1 * np.ones_like(s)  # np.where(z < H1, W1 * z / H1, W1) 
 
 
-def density_atm(s, V, ks=0.09, kw=0.9, g=9.81, Ca=1006, Cp0=1885,
+def density_atm(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
                 Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05):
     Ta = Ta0
     Pa = V[4]
     return Pa / (Ra * Ta)
     
 
-def density_fume(s, V, ks=0.09, kw=0.9, g=9.81, Ca=1006, Cp0=1885,
+def density_fume(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
                  Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05):
     '''Returns the density of the fumarole, based on ideal gas
     '''
@@ -97,7 +111,7 @@ def density_fume(s, V, ks=0.09, kw=0.9, g=9.81, Ca=1006, Cp0=1885,
     return Pa / (Rp * T) 
 
 
-def heat_capacity(s, V, ks=0.09, kw=0.9, g=9.81, Ca=1006, Cp0=1885,
+def heat_capacity(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
                   Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05):
     """
     Define specific heat capacity, Cp, of plume, as a function of the dry air 
@@ -108,7 +122,7 @@ def heat_capacity(s, V, ks=0.09, kw=0.9, g=9.81, Ca=1006, Cp0=1885,
     return Ca + (Cp0 - Ca) * (1 - V[5]) / (1 - n0)
 
 
-def bulk_gas_constant(s, V, ks=0.09, kw=0.9, g=9.81, Ca=1006, Cp0=1885,
+def bulk_gas_constant(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
                       Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05):
     """
     Define bulk gas constant, Rp, of the plume, as a function of the dry air 
@@ -120,7 +134,7 @@ def bulk_gas_constant(s, V, ks=0.09, kw=0.9, g=9.81, Ca=1006, Cp0=1885,
     return Ra + (Rp0 - Ra) * (n0 * (1 - n)) / (n * (1 - n0))  
 
 
-def temperature_fume(s, V, ks=0.09, kw=0.9, g=9.81, Ca=1006, Cp0=1885,
+def temperature_fume(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
                      Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05):
     #specific gas constant water vapour: 461.5 J/(kgK)
     """
@@ -218,7 +232,21 @@ def solve_system(x0, s, data, errors):
     return objective_fn(Gm, d, errors, mode='lstsq')
     
 
-def do_plots(dimensionality, T0, R0, objFn):
+def do_plots(dimensionality, T0, R0, objFn, exponentiate=False):
+    fig0, ax0 = plt.subplots(figsize=(10*cm, 10*cm))
+    ax0.plot(solp.T, s, '-')
+    ax0.set_xlabel('Plume parameters')
+    ax0.set_ylabel(r'Distance along plume axis, $s$')
+    ax0.legend((r'$\theta$', r'$b$', r'$T$'))
+
+    plt.gca().set_prop_cycle(None)  # reset colour cycle
+    ax0.plot(sol_noise.T, s, '.')
+
+    fig0.tight_layout()
+    
+    S = objective_fn(Gm, d, Cd_inv, 'leastsq', False)
+    print(f'Value of misfit function: {S}')
+    
     fig, ax = plt.subplots(figsize=(10*cm, 10*cm))
     if dimensionality == 2:
         Ropt_ind, Topt_ind = np.where(objFn == objFn.min())
@@ -237,24 +265,10 @@ def do_plots(dimensionality, T0, R0, objFn):
 
     ax.legend()
 
-    return
+    return ax0, ax
     
 if __name__ == '__main__':
-    from itertools import product
-    from myiapws import iapws1992, iapws1995
-    from matplotlib import pyplot as plt
-    from matplotlib.colors import LogNorm
-    #from mpl_toolkits import mplot3d
-    from scipy.integrate import solve_ivp
-    from scipy.optimize import minimize
-    from joblib import Parallel, delayed
-    from IPython.display import IFrame
-    from functools import partial
-
-    import time
-    import pandas as pd
-    import plotly.graph_objects as go
-
+    import sys
 
     ## Helper functions for plotting
     def get_the_slice(x,y,z, surfacecolor):
@@ -278,26 +292,35 @@ if __name__ == '__main__':
     """
     plt.close('all')
 
-    # Job options
-    njobs =  12
+    ##  Job options
+    ncore =  12  # Number of processors/cores
     ngrid = 101  # Number of grid points
-    plots = False
+    if len(sys.argv) == 2:
+        ncore   = int(sys.argv[1])
+    if len(sys.argv) >= 3:
+        ncore   = int(sys.argv[1])
+        ngrid   = int(sys.argv[2])
+    inversion   = False
+    nelder_mead = False
+    plots       = False
+    if len(sys.argv) == 4:
+        if sys.argv[3] == 'True':
+            inversion = True
 
     R0 = np.linspace(0.1, 1, ngrid)  
     T0 = np.linspace(80 + Tt, 160 + Tt, ngrid)
     U0 = np.linspace(0.1, 100, ngrid)
 
-    # fixed parameters
-    npts = 101
-    rho0 = 0.5   # careful, density will vary with temperature!
-    Cp0  = 1885  # careful, Cp0 will vary with temperatur!e
-    Rp0  = 462   # careful, Rp0 will vary with temperatur!e
-    Pa0  = 86000 # Atmospheric pressure at altitude of la Soufriere
+    ##  fixed parameters
+    nsol   =   101   # number of points at which "observations" will be made
+    Cp0    =  1885   # careful, Cp0 will vary with temperatur!e
+    Pa0    = 86000   # Atmospheric pressure at altitude of la Soufriere
     theta0 = np.pi/2
-    n0   = 0.05  # Fumarole plumes are always 95% vapour?
-    Ta0  = 291   # Tair 2-year average at Sanner
-    s    = np.linspace(0, 100, npts)
-    # variables
+    n0     = 0.05  # Fumarole plumes are always 95% vapour?
+    Ta0    = 291   # Tair 2-year average at Sanner
+    s      = np.linspace(0, 100, nsol)
+
+    ##  variables
     rho0true = .5
     R0true = .5
     T0true = Tt + 96
@@ -309,92 +332,75 @@ if __name__ == '__main__':
  
     sol_true = solve_ivp(derivs, [s[0], s[-1]], V0true, t_eval=s)
 
-    cm = 1/2.54
-
     # Produce "true" data values
-    sol  = sol_true
-    rho  = density_fume(sol.t, sol.y)
-    T    = temperature_fume(sol.t, sol.y) - Tt
-    Cp   = heat_capacity(sol.t, sol.y)
-    b    = sol.y[0] / np.sqrt(rho * sol.y[1])
-    u    = sol.y[1] / sol.y[0]
+    sol   = sol_true
+    rho   = density_fume(sol.t, sol.y)
+    T     = temperature_fume(sol.t, sol.y) - Tt
+    Cp    = heat_capacity(sol.t, sol.y)
+    b     = sol.y[0] / np.sqrt(rho * sol.y[1])
+    u     = sol.y[1] / sol.y[0]
     theta = sol.y[3]
 
-    noise_level = 2
+    noise_level = 1
     sigtheta, sigb, sigT = (np.pi / 10 * noise_level,
                             .5 * noise_level, 1 * noise_level)  # rad, m and K
     Cd_inv = np.diag(np.array([1 / sigtheta**2 * np.ones_like(theta),
                                1 / sigb**2 * np.ones_like(b),
                                1 / sigT**2 * np.ones_like(T)]).ravel())
 
-    solp = np.array([theta, b, T])
+    solp  = np.array([theta, b, T])
     noise = np.random.randn(*solp.shape)  # Gaussian noise, _N_(0,1)
     sol_noise = (solp.T + noise.T * (sigtheta, sigb, sigT)).T
     d    = sol_noise.flatten()  # array of data
     Gm   = produce_Gm(s, sol)
     Gm_d = Gm - d
     
-    # fig0, ax0 = plt.subplots(figsize=(10*cm, 10*cm))
-    # ax0.plot(solp.T, s, '-')
-    # ax0.set_xlabel('Plume parameters')
-    # ax0.set_ylabel(r'Distance along plume axis, $s$')
-    # ax0.legend((r'$\theta$', r'$b$', r'$T$'))
+    if inversion:
+        """
+        Run jobs in parallel in order to calculate objective function at
+        each combination of possible source values.
+        """
+        # "wrapper" partial function to simplify notation below
+        pj = partial(parallel_job, s=s, d=d, Cd_inv=Cd_inv)
+        t  = time.perf_counter()
 
-    # plt.gca().set_prop_cycle(None)  # reset colour cycle
-    # ax0.plot(sol_noise.T, s, '.')
+        dimensionality = 2
+        if dimensionality == 2:
+            u0 = U0true
+            sequence = [R0, T0]
+            results = Parallel(n_jobs=ncore)(delayed(pj)(u0, r0, t0) for (
+                r0, t0) in list(product(*sequence)))
 
-    # fig0.tight_layout()
-    
-    # S = objective_fn(Gm, d, Cd_inv, 'leastsq', False)
-    # print(f'Value of misfit function: {S}')
-    
+            print("Job ran in %.3f s using %2d processors" % (
+                time.perf_counter() - t, ncore))
 
-    """
-    Run jobs in parallel in order to calculate objective function at
-    each combination of possible source values.
-    """
-    # "wrapper" partial function to simplify notation below
-    pj = partial(parallel_job, s=s, d=d, Cd_inv=Cd_inv)
-    t  = time.perf_counter()
-    dp = partial(do_plots, T0=T0, R0=R0, objFn=objFn)
+            ## Deal out the results
+            objFn, initialConds = [], []
 
-    dimensionality = 2
-    if dimensionality == 2:
-        u0 = U0true
-        sequence = [R0, T0]
-        results = Parallel(n_jobs=njobs)(delayed(pj)(u0, r0, t0) for (
-            r0, t0) in list(product(*sequence)))
-    
-        print("Job ran in %.3f s using %2d processors" % (
-            time.perf_counter() - t, njobs))
+            for result in results:
+                objFn.append(result[0])
+                initialConds.append(result[1])
 
-        ## Deal out the results
-        objFn, initialConds = [], []
+            initialConds = np.array(initialConds)
+            objFn = np.array(objFn).reshape((-1, ngrid))
 
-        for result in results:
-            objFn.append(result[0])
-            initialConds.append(result[1])
+        if dimensionality == 3:
+            sequence = [U0, R0, T0]
+            results = Parallel(n_jobs=ncore)(delayed(pj)(u0, r0, t0) for (
+                u0, r0, t0) in list(product(*sequence)))
 
-        initialConds = np.array(initialConds)
-        objFn = np.array(objFn).reshape((-1, ngrid))
+            print("Job ran in %.3f s using %2d processors" % (
+                time.perf_counter() - t, ncore))
 
-    if dimensionality == 3:
-        sequence = [U0, R0, T0]
-        results = Parallel(n_jobs=njobs)(delayed(pj)(u0, r0, t0) for (
-            u0, r0, t0) in list(product(*sequence)))
-    
-        print("Job ran in %.3f s using %2d processors" % (
-            time.perf_counter() - t, njobs))
+            ## Deal out the results
+            objFn, initialConds = [], []
 
-        ## Deal out the results
-        objFn, initialConds = [], []
+            for result in results:
+                objFn.append(result[0])
+                initialConds.append(result[1])
 
-        for result in results:
-            objFn.append(result[0])
-            initialConds.append(result[1])
-
-        initialConds = np.array(initialConds)
-        objFn = np.array(objFn).reshape((-1, ngrid, ngrid))
+            initialConds = np.array(initialConds)
+            objFn = np.array(objFn).reshape((-1, ngrid, ngrid))
 
     if nelder_mead:
         x0  = V0true  # [1, 1, 1, np.pi/2 , 86000, 0.05]
@@ -406,5 +412,6 @@ if __name__ == '__main__':
         print("Solution found using Nelder-Mead in %.3f s" % (
             time.perf_counter() - t))
 
-    if plots():
+    if plots:
+        dp = partial(do_plots, T0=T0, R0=R0, objFn=objFn)
         dp(dimensionality)
