@@ -209,6 +209,36 @@ def parallel_job(U0, R0, T0, s, d, Cd_inv):
     return objective_fn(Gm, d, Cd_inv, mode='lstsq'), V0
 
 
+def solve_system(x0, s, data, errors):
+    """Helper function for the minimisation problem using 
+    scipy.optimize.minimize
+    """
+    sol = solve_ivp(derivs, [s[0], s[-1]], x0, t_eval=s)
+    Gm  = produce_Gm(s, sol)
+    return objective_fn(Gm, d, errors, mode='lstsq')
+    
+
+def do_plots(dimensionality, T0, R0, objFn):
+    fig, ax = plt.subplots(figsize=(10*cm, 10*cm))
+    if dimensionality == 2:
+        Ropt_ind, Topt_ind = np.where(objFn == objFn.min())
+        im = ax.pcolor(T0, R0, np.exp(-objFn), norm=LogNorm(),
+                       label='misfit function')
+    if dimensionality == 3:
+        Uopt_ind, Ropt_ind, Topt_ind = np.where(objFn == objFn.min())
+        im = ax.pcolor(T0, R0, np.exp(-objFn[Uopt_ind]), norm=LogNorm(),
+                       label='misfit function')
+    p = ax.plot(T0true, R0true, 'wo', label='true conditions')
+    # q = ax.plot(T0[Topt_ind], R0[Ropt_ind], 'y*', mec='k', mew=.25,
+    #             label='opt. conditions')
+    
+    ax.set_xlabel(r'Vent radius, $R_0/$[m]')
+    ax.set_ylabel(r'Vent temperature, $T_0$/[K]')
+
+    ax.legend()
+
+    return
+    
 if __name__ == '__main__':
     from itertools import product
     from myiapws import iapws1992, iapws1995
@@ -248,6 +278,15 @@ if __name__ == '__main__':
     """
     plt.close('all')
 
+    # Job options
+    njobs =  12
+    ngrid = 101  # Number of grid points
+    plots = False
+
+    R0 = np.linspace(0.1, 1, ngrid)  
+    T0 = np.linspace(80 + Tt, 160 + Tt, ngrid)
+    U0 = np.linspace(0.1, 100, ngrid)
+
     # fixed parameters
     npts = 101
     rho0 = 0.5   # careful, density will vary with temperature!
@@ -281,7 +320,7 @@ if __name__ == '__main__':
     u    = sol.y[1] / sol.y[0]
     theta = sol.y[3]
 
-    noise_level = 1
+    noise_level = 2
     sigtheta, sigb, sigT = (np.pi / 10 * noise_level,
                             .5 * noise_level, 1 * noise_level)  # rad, m and K
     Cd_inv = np.diag(np.array([1 / sigtheta**2 * np.ones_like(theta),
@@ -295,139 +334,77 @@ if __name__ == '__main__':
     Gm   = produce_Gm(s, sol)
     Gm_d = Gm - d
     
-    fig0, ax0 = plt.subplots(figsize=(10*cm, 10*cm))
-    ax0.plot(solp.T, s, '-')
-    ax0.set_xlabel('Plume parameters')
-    ax0.set_ylabel(r'Distance along plume axis, $s$')
-    ax0.legend((r'$\theta$', r'$b$', r'$T$'))
+    # fig0, ax0 = plt.subplots(figsize=(10*cm, 10*cm))
+    # ax0.plot(solp.T, s, '-')
+    # ax0.set_xlabel('Plume parameters')
+    # ax0.set_ylabel(r'Distance along plume axis, $s$')
+    # ax0.legend((r'$\theta$', r'$b$', r'$T$'))
 
-    plt.gca().set_prop_cycle(None)  # reset colour cycle
-    ax0.plot(sol_noise.T, s, '.')
+    # plt.gca().set_prop_cycle(None)  # reset colour cycle
+    # ax0.plot(sol_noise.T, s, '.')
 
-    fig0.tight_layout()
+    # fig0.tight_layout()
     
     # S = objective_fn(Gm, d, Cd_inv, 'leastsq', False)
     # print(f'Value of misfit function: {S}')
     
 
-    # """
-    # Run jobs in parallel in order to calculate objective function at
-    # each combination of possible source values.
-    # """
-    # njobs = 8
-    # ngrid = 51  # Number of grid points
+    """
+    Run jobs in parallel in order to calculate objective function at
+    each combination of possible source values.
+    """
+    # "wrapper" partial function to simplify notation below
+    pj = partial(parallel_job, s=s, d=d, Cd_inv=Cd_inv)
+    t  = time.perf_counter()
+    dp = partial(do_plots, T0=T0, R0=R0, objFn=objFn)
 
-    # R0 = np.linspace(0.1, 1, ngrid)  
-    # T0 = np.linspace(80 + Tt, 160 + Tt, ngrid)
-    # U0 = np.linspace(0.1, 100, ngrid)
-
-    # # "wrapper" partial function to simplify notation below
-    # pj = partial(parallel_job, s=s, d=d, Cd_inv=Cd_inv)
-    # t  = time.perf_counter()
-    # sequence = [U0, R0, T0]
-    # results = Parallel(n_jobs=njobs)(delayed(pj)(u0, r0, t0) for (
-    #     u0, r0, t0) in list(product(*sequence)))
+    dimensionality = 2
+    if dimensionality == 2:
+        u0 = U0true
+        sequence = [R0, T0]
+        results = Parallel(n_jobs=njobs)(delayed(pj)(u0, r0, t0) for (
+            r0, t0) in list(product(*sequence)))
     
-    # print("Job ran in %.3f s using %2d processors" % (
-    #     time.perf_counter() - t, njobs))
+        print("Job ran in %.3f s using %2d processors" % (
+            time.perf_counter() - t, njobs))
 
-    # ## Deal out the results
-    # objFn, initialConds = [], []
+        ## Deal out the results
+        objFn, initialConds = [], []
 
-    # for result in results:
-    #     objFn.append(result[0])
-    #     initialConds.append(result[1])
+        for result in results:
+            objFn.append(result[0])
+            initialConds.append(result[1])
 
-    # initialConds = np.array(initialConds)
-    # objFn = np.array(objFn).reshape((-1, ngrid, ngrid))
-               
-    # # res   = minimize(
+        initialConds = np.array(initialConds)
+        objFn = np.array(objFn).reshape((-1, ngrid))
 
-    # fig, ax = plt.subplots(figsize=(10*cm, 10*cm))
-    # im = ax.pcolor(T0, R0, np.exp(-objFn[5]), norm=LogNorm(),
-    #                label='objective function')
-    # ax.plot(T0true, R0true, 'wo', label='true conditions')
-    # # argmax gives element number.  To convert to row number, do Euclidian
-    # # division wrt N and take modulo N for columns.
-    # Uopt_ind, Topt_ind, Ropt_ind = np.where(objFn == objFn.min())
-    # ax.plot(T0[Topt_ind], R0[Ropt_ind], 'ko', label='opt. conditions')
+    if dimensionality == 3:
+        sequence = [U0, R0, T0]
+        results = Parallel(n_jobs=njobs)(delayed(pj)(u0, r0, t0) for (
+            u0, r0, t0) in list(product(*sequence)))
     
-    # ax.set_xlabel(r'Vent radius, $R_0/$[m]')
-    # ax.set_ylabel(r'Vent temperature, $T_0$/[K]')
+        print("Job ran in %.3f s using %2d processors" % (
+            time.perf_counter() - t, njobs))
 
-    # ax.legend()
+        ## Deal out the results
+        objFn, initialConds = [], []
 
-    # # m = {} 
-    # # d = {}
-    # # E = []
+        for result in results:
+            objFn.append(result[0])
+            initialConds.append(result[1])
 
-    # # #get all possible combinations of initial conditions
-    # # for var in varlist:
-    # #     t0 = var[0]
-    # #     r0 = var[1]
-    # #     Q0 = rho0 * v0 * r0**2 * np.pi
-    # #     M0 = Q0 * v0
-    # #     E0 = Q0 * Cp0 * t0
-        
-    # #     V0 = [Q0, M0, E0, theta0, Pa0, n0]
-        
-    # #     s = np.linspace(0, 50, npts)
-    # #     sol = solve_ivp(derivs, [s[0], s[-1]], V0, t_eval=s)
-        
-    # #     # out = [sol.t, sol.y[0], sol.y[1], sol.y[2],
-    # #     #        sol.y[3], sol.y[4], sol.y[5]]
-    # #     # m_out[var] = pd.DataFrame(out, index =['s', 'Q', 'M', 'theta',
-    # #     #                                        'E', 'Pa', 'n'])
-        
-    # #     """
-    # #     Transform model output into "useful" variables
+        initialConds = np.array(initialConds)
+        objFn = np.array(objFn).reshape((-1, ngrid, ngrid))
 
-    # #     plume temperature T=E/(Q cp)
-    # #     plume density: density_fume(T)
-    # #     plume velocity U=M/Q
-    # #     plume radius R=Q/(sqrt(rho M))
-    # #     plume angle theta
-    # #     plume height z
-    # #     """
+    if nelder_mead:
+        x0  = V0true  # [1, 1, 1, np.pi/2 , 86000, 0.05]
+        t   = time.perf_counter()
+        res = minimize(solve_system, x0=V0true, args=(s, d, Cd_inv),
+                       method='Nelder-Mead',
+                       bounds=((0, np.inf), (0, np.inf), (0, np.inf),
+                               (np.pi/2, np.pi/2), (Pa0, Pa0), (n0, n0)))
+        print("Solution found using Nelder-Mead in %.3f s" % (
+            time.perf_counter() - t))
 
-    # #     T     = temperature_fume(sol.t, sol.y)
-    # #     rho   = density_fume(sol.t, sol.y)
-    # #     U     = sol.y[1] / sol.y[0]
-    # #     R     = sol.y[0] / np.sqrt(rho * sol.y[1]) 
-    # #     theta = sol.y[3]
-    # #     z     = sol.t*np.sin(theta)
-        
-    # #     # m[var] = pd.DataFrame([s, T, R, z, U, rho, theta, n],
-    # #     #                       index =['s', 'T', 'R', 'z', 'U',
-    # #     #                               'rho', 'theta', 'n'])
-    # #     m[var] = pd.DataFrame([T, R, theta], index =['T', 'R', 'theta'])
-        
-    # #     #add noise
-    # #     noise_perc = 0.1
-    # #     T_noised = T + (np.random.normal(0, T.std(), len(T)) * noise_perc)
-    # #     R_noised = R + (np.random.normal(0, R.std(), len(R)) * noise_perc)
-    # #     theta_noised = theta + (
-    # #         np.random.normal(0, theta.std(), len(theta)) * noise_perc)
-        
-    # #     d[var] = pd.DataFrame([T_noised, R_noised, theta_noised],
-    # #                           index =['T', 'R', 'theta'])
-        
-    # #     # Calculate error between model and synthetc data:
-    # #     E_T = (abs(T-T_noised))/T.std()
-    # #     E_R = (abs(R-R_noised))/R.std()
-    # #     E_theta = (abs(theta-theta_noised))/theta.std()
-        
-    # #     E_sum = E_T.sum() + E_R.sum() + E_theta.sum()
-    # #     E.append(E_sum)  # list with absolute error for each of the starting
-    # #                      # conditions
-        
-
-    # # t0, r0 = zip(*varlist)
-    # # size = [1.2**n for n in E]
-
-    # # fig1, ax = plt.subplots()    
-    # # cs = ax.scatter(t0, r0, s=size, c=E, cmap='viridis')  #c=colors, alpha=0.5
-    # # ax.set_xlabel('T0', fontsize=12)
-    # # ax.set_ylabel('R0', fontsize=12)
-    # # cbar = plt.colorbar(cs)
-    # # plt.show() 
+    if plots():
+        dp(dimensionality)
