@@ -15,11 +15,11 @@ from matplotlib.colors import LogNorm
 from scipy.integrate import solve_ivp
 from scipy.optimize import minimize
 from joblib import Parallel, delayed
-#from IPython.display import IFrame
 from functools import partial
 
 import numpy as np
 import time
+import warnings
 #import pandas as pd
 #import plotly.graph_objects as go
 
@@ -28,10 +28,8 @@ Tt = iapws1995.Tt  # Triple point of water
 cm = 1/2.54
 
 
-def derivs(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
-           Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05,
-           wind=True, W1=5, H1=5):
-    #Ca 1001 J/kg/K, Cp water vapour at 95 C 1880 J/kg/K:
+def derivs(s, V, *args):
+    #Ca 1001 J/kg/K, Cp water vapour at 95°C, 1880 J/kg/K:
     #https://www.engineeringtoolbox.com/water-vapor-d_979.html
     """
     axial distance s, state vector V, 
@@ -45,11 +43,12 @@ def derivs(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
     order of state vector V:  Q, M, th, E, Pa, n (mass flux, momentum flux, 
     plume angle, enthalpy flux, atmospheric pressure, mass fraction air)
     """
+    ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode = args 
     Ta   = Ta0
-    W    = wind_profile(s, V)
-    rhoa = density_atm(s, V, Ra=Ra)
-    rho  = density_fume(s, V)
-    Ue   = entrainment_vel(s, V)   # entrainment velocity normal to plume axis
+    W    = wind_profile(s, V, *args)
+    rhoa = density_atm(s, V, *args)
+    rho  = density_fume(s, V, *args)
+    Ue   = entrainment_vel(s, V, *args)   # entrainment velocity normal to plume axis
     Q, M, E, th, Pa, n = V
 
     dQ  = 2 * rhoa * Ue * Q / (np.sqrt(rho * M))
@@ -71,17 +70,17 @@ def derivs(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
     return np.array([dQ, dM, dE, dth, dPa, dn])
 
 
-def entrainment_vel(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
-                    Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05,
-                    wind=True, W1=5, H1=5):
-    W  = wind_profile(s, V)
+def entrainment_vel(s, V, *args): # ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
+                    # Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05,
+                    # wind=True, W1=5, H1=5, mode='leastsq'):
+    ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode = args
+    # print(ks, kw)
+    W  = wind_profile(s, V, *args)
     Q, M, _, th, _, _ = V  # Don't need E, Pa, n
     return ks * np.abs(M / Q - W * np.cos(th)) + kw * np.abs(W * np.sin(th))
 
     
-def wind_profile(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
-                 Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05,
-                 wind=True, W1=5, H1=5):
+def wind_profile(s, V, *args): 
     """
     Define atmospheric properties:
     wind speed: wind_profile(s,V): constant wind shear between ground and 
@@ -89,6 +88,7 @@ def wind_profile(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
     air density: density_atm depending on spec. gas constant of air Ra and air 
     temperature Ta (assumed constant at about 18 deg C)
     """
+    ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode = args
     if not wind:
         return np.zeros_like(s)
     # average wind speed at Sanner ~38 km/h -> 10.556 m/s
@@ -98,54 +98,48 @@ def wind_profile(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
     return np.where(z < H1, W1 * z / H1, W1) 
 
 
-def density_atm(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
-                Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05,
-                wind=True, W1=5, H1=5):
+def density_atm(s, V, *args):
+    ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode = args
     Ta = Ta0
     Pa = V[4]
     return Pa / (Ra * Ta)
     
 
-def density_fume(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
-                 Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05,
-                 wind=True, W1=5, H1=5):
+def density_fume(s, V, *args):
     '''Returns the density of the fumarole, based on ideal gas
     '''
-    T  = temperature_fume(s, V)
+    ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode = args
+    T  = temperature_fume(s, V, *args)
     Pa = V[4]  # atmospheric pressure
     n  = V[5]
-    Rp = bulk_gas_constant(s, V)
+    Rp = bulk_gas_constant(s, V, *args)
     return Pa / (Rp * T) 
 
 
-def heat_capacity(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
-                  Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05,
-                  wind=True, W1=5, H1=5):
+def heat_capacity(s, V, *args):
     """
     Define specific heat capacity, Cp, of plume, as a function of the dry air 
       mass fraction, n, for initial 95% of vapour 
     Ca:  spec. heat capacity of air
     Cp0: spec. heat capacity of vapour
     """  
+    ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode = args
     return Ca + (Cp0 - Ca) * (1 - V[5]) / (1 - n0)
 
 
-def bulk_gas_constant(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
-                      Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05,
-                      wind=True, W1=5, H1=5):
+def bulk_gas_constant(s, V, *args):
     """
     Define bulk gas constant, Rp, of the plume, as a function of the dry air 
     mass fraction in the plume, n.
     Ra:  gas constant of dry air
     Rp0: gas constant of vapour 
     """
+    ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode = args
     n = V[5]  # dry air mass fraction
     return Ra + (Rp0 - Ra) * (n0 * (1 - n)) / (n * (1 - n0))  
 
 
-def temperature_fume(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
-                     Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05,
-                     wind=True, W1=5, H1=5):
+def temperature_fume(s, V, *args):
     #specific gas constant water vapour: 461.5 J/(kgK)
     """
     Define fumarole plume properties
@@ -158,17 +152,18 @@ def temperature_fume(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
     windspeed W
     entrainment coefficients: ks and kw
     """
+    ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode = args
     Q, _, E, *_ = V
-    Cp = heat_capacity(s, V)
+    Cp = heat_capacity(s, V, *args)
     return E / (Q * Cp)  
 
 
-def produce_Gm(s, sol):
+def produce_Gm(s, sol, *args):
     """Returns the model predictions in a format suitable for comparison with 
     data"""
-    rho  = density_fume(sol.t, sol.y)
-    T    = temperature_fume(sol.t, sol.y) - Tt
-    Cp   = heat_capacity(sol.t, sol.y)
+    rho  = density_fume(sol.t, sol.y, *args)
+    T    = temperature_fume(sol.t, sol.y, *args) - Tt
+    Cp   = heat_capacity(sol.t, sol.y, *args)
     b    = sol.y[0] / np.sqrt(rho * sol.y[1])
     u    = sol.y[1] / sol.y[0]
     theta = sol.y[3]
@@ -190,7 +185,10 @@ def objective_fn(model, data, errors, mode='leastsq', exponentiate=False):
     Gm_d   = model - data
     errors = np.array(errors)
     if mode != 'abs' and mode != 'leastsq' and mode != 'lstsq':
-        raise TypeError('Unknown mode: should be either "abs" or "leastsq"')
+        mode = 'lstsq'  
+        warnings.warn('Unknown mode: should be either "abs" or "leastsq.  ' +
+                      'Defaulting to leastsq"')
+    
     
     # Laplacian distributed erros - absolute value of model - data
     if mode == 'abs':
@@ -211,35 +209,39 @@ def objective_fn(model, data, errors, mode='leastsq', exponentiate=False):
     return 1 - np.exp(-S)
 
 
-def parallel_job(U0, R0, T0, s, d, Cd_inv, args): 
-    import warnings
+def parallel_job(U0, R0, T0, s, d, Cd_inv, *args): 
     from scipy.integrate import solve_ivp
 
     # errors/Cd_inv are not passed explicitly as arguements
     warnings.filterwarnings('ignore')
-    n0   = .05
-    Cp0  = heat_capacity(0, [0, 0, 0, 0, 0, n0])
-    Pa0  = 86000
+    ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode = args
     V0   = [1, 1, Cp0 * T0, 1, Pa0, n0]  # required for routines
-    rho0 = density_fume(0, V0)
+    rho0 = density_fume(0, V0, *args)
     Q0   = rho0 * np.pi * R0**2 * U0
     M0   = Q0 * U0
     E0   = Q0 * Cp0 * T0
     V0   = [Q0, M0, E0, np.pi/2, Pa0, .05]
 
+    ## Extract mode from args if it has been included
     sol  = solve_ivp(derivs, [s[0], s[-1]], V0, t_eval=s, args=args)
-    Gm   = produce_Gm(s, sol)
+    Gm   = produce_Gm(s, sol, *args)
 
-    return objective_fn(Gm, d, Cd_inv, mode='lstsq'), V0
+    return objective_fn(Gm, d, Cd_inv, mode=mode), V0
 
 
 def solve_system(x0, s, data, errors, *args):
     """Helper function for the minimisation problem using 
     scipy.optimize.minimize
     """
-    sol = solve_ivp(derivs, [s[0], s[-1]], x0, t_eval=s, args=args)
-    Gm  = produce_Gm(s, sol)
-    return objective_fn(Gm, d, errors, mode='lstsq')
+    sol  = solve_ivp(derivs, [s[0], s[-1]], x0, t_eval=s, args=args)
+    Gm   = produce_Gm(s, sol, *args)
+
+    ## Extract mode from args if it has been included
+    mode = 'lstsq'
+    if type(args[-1]) is str:
+        mode = args[-1]
+
+    return objective_fn(Gm, d, errors, mode=mode)
     
 
 def do_plots(dimensionality, T0, R0, objFn, exponentiate=False):
@@ -276,7 +278,8 @@ def do_plots(dimensionality, T0, R0, objFn, exponentiate=False):
     ax.legend()
 
     return ax0, ax
-    
+
+
 if __name__ == '__main__':
     """
     To run a calculation, do
@@ -291,7 +294,9 @@ if __name__ == '__main__':
     wind  : bool
     """
     import sys
+    
     from pathlib import Path
+    #from IPython.display import IFrame
 
     home_str = str(Path.home())
 
@@ -318,7 +323,6 @@ if __name__ == '__main__':
     plt.close('all')
     
     ##  Job options
-    print(sys.argv)
     ncore =  12  # Number of processors/cores
     ngrid = 101  # Number of grid points
     if len(sys.argv) == 2:
@@ -339,20 +343,20 @@ if __name__ == '__main__':
     if len(sys.argv) == 6:
         if sys.argv[5] == 'True':
             wind = True
-    sigma = .1
+    sigma = .01
 
-    R0 = np.linspace(0.1, 1, ngrid)  
-    T0 = np.linspace(60 + Tt, 140 + Tt, ngrid)
+    R0 = np.linspace(0.1, 2, ngrid)  
+    T0 = np.linspace(50 + Tt, 150 + Tt, ngrid)
     U0 = np.linspace(0.1, 20, ngrid)
 
     ##  fixed parameters
-    nsol   =   101   # number of points at which "observations" will be made
-    Cp0    =  1885   # careful, Cp0 will vary with temperatur!e
-    Pa0    = 86000   # Atmospheric pressure at altitude of la Soufriere
-    theta0 = np.pi/2
-    n0     = 0.05  # Fumarole plumes are always 95% vapour?
-    Ta0    = 291   # Tair 2-year average at Sanner
-    s      = np.linspace(0, 100, nsol)
+    nsol   =    51    # number of points at which "observations" will be made
+    Cp0    =  1885    # careful, Cp0 will vary with temperatur!e
+    Pa0    = 86000    # Atmospheric pressure at altitude of la Soufriere
+    theta0 = np.pi/2  # Initially vertical plume
+    n0     =     0.05 # Fumarole plumes are always 95% vapour?
+    Ta0    =   291    # Tair 2-year average at Sanner
+    s      = np.linspace(0, 15, nsol)  # Go up to 15 m
 
     ##  variables
     rho0true = .5
@@ -364,16 +368,16 @@ if __name__ == '__main__':
     E0true = Q0true * Cp0 * T0true
     V0true = [Q0true, M0true, E0true, theta0, Pa0, n0]
     args   = (.09, .5, 9.81, 1006, 1885, 291, 287, 462, 86000, 0.05,
-              wind, 5, 5)  # ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0,
-                           # wind, W1, H1
+              wind, 5, 5, 'lstsq')  
+    # ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode
  
     sol_true = solve_ivp(derivs, [s[0], s[-1]], V0true, t_eval=s, args=args)
 
     # Produce "true" data values
     sol   = sol_true
-    rho   = density_fume(sol.t, sol.y)
-    T     = temperature_fume(sol.t, sol.y) - Tt
-    Cp    = heat_capacity(sol.t, sol.y)
+    rho   = density_fume(sol.t, sol.y, *args)
+    T     = temperature_fume(sol.t, sol.y, *args) - Tt
+    Cp    = heat_capacity(sol.t, sol.y, *args)
     b     = sol.y[0] / np.sqrt(rho * sol.y[1])
     u     = sol.y[1] / sol.y[0]
     theta = sol.y[3]
@@ -389,7 +393,7 @@ if __name__ == '__main__':
     noise = sigma * np.random.randn(*solp.shape)  # Gaussian noise, _N_(0,1)
     sol_noise = (solp.T + noise.T * (sigtheta, sigb, sigT)).T
     d    = sol_noise.flatten()  # array of data
-    Gm   = produce_Gm(s, sol)
+    Gm   = produce_Gm(s, sol, *args)
     Gm_d = Gm - d
     
     if inversion:
@@ -405,8 +409,9 @@ if __name__ == '__main__':
         if dimensionality == 2:
             u0 = U0true
             sequence = [R0, T0]
-            results = Parallel(n_jobs=ncore)(delayed(pj)(u0, r0, t0) for (
-                r0, t0) in list(product(*sequence)))
+            results  = Parallel(n_jobs=ncore)(delayed(parallel_job)(
+                 u0, r0, t0, s, d, Cd_inv, *args) for (
+                     r0, t0) in list(product(*sequence)))
 
             print("Job ran in %.3f s using %2d processors" % (
                 time.perf_counter() - t, ncore))
@@ -444,7 +449,7 @@ if __name__ == '__main__':
             f'objFn_soln_{dimensionality}D_{ngrid:04d}pts_{ncore:03d}cores'
         if wind:
             save_str += '_wind'
-        np.savez(save_str, R0=R0, T0=T0, U0=U0, objFn=objFn)
+        np.savez(save_str, R0=R0, T0=T0, U0=U0, objFn=objFn, solp=solp)
         ## To retrieve variables, use np.load which will parse them as a
         ## dict-like object, i.e.
         ## container = np.load(filename)
