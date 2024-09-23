@@ -53,10 +53,10 @@ def derivs(s, V, *args):
 
     dQ  = 2 * rhoa * Ue * Q / (np.sqrt(rho * M))
 
-    dM  = g * (rhoa - rho) * Q**2 / (rho * M) * np.sin(th) \
+    dM  = g * (rhoa - rho) * Q**2 / (rho * M) * np.sin(th) \ 
         + 2 * rhoa * Q / (np.sqrt(rho * M)) * Ue * W * np.cos(th)
     
-    dth = g * (rhoa - rho) * Q**2 / (rho * M**2) * np.cos(th) \
+    dth = g * (rhoa - rho) * Q**2 / (rho * M**2) * np.cos(th) \ 
         - 2 * rhoa * Q / (M * np.sqrt(rho * M)) * Ue * W * np.sin(th)
 
     dE  = (Ca * Ta + (Ue**2) / 2)* dQ + M**2 / (2 * Q**2) * dQ \
