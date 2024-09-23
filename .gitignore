@@ -42,3 +42,4 @@ plumeAnalyserSyntheticVertical_files/
 *.out
 *.aux
 plumemodel_for_thesis/
+*.np*
