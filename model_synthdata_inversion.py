@@ -29,7 +29,8 @@ cm = 1/2.54
 
 
 def derivs(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
-           Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05):
+           Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05,
+           wind=True, W1=5, H1=5):
     #Ca 1001 J/kg/K, Cp water vapour at 95 C 1880 J/kg/K:
     #https://www.engineeringtoolbox.com/water-vapor-d_979.html
     """
@@ -71,14 +72,16 @@ def derivs(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
 
 
 def entrainment_vel(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
-                    Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05):
+                    Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05,
+                    wind=True, W1=5, H1=5):
     W  = wind_profile(s, V)
     Q, M, _, th, _, _ = V  # Don't need E, Pa, n
     return ks * np.abs(M / Q - W * np.cos(th)) + kw * np.abs(W * np.sin(th))
 
     
 def wind_profile(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
-                 Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05, W1=5, H1=5):
+                 Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05,
+                 wind=True, W1=5, H1=5):
     """
     Define atmospheric properties:
     wind speed: wind_profile(s,V): constant wind shear between ground and 
@@ -86,22 +89,26 @@ def wind_profile(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
     air density: density_atm depending on spec. gas constant of air Ra and air 
     temperature Ta (assumed constant at about 18 deg C)
     """
+    if not wind:
+        return np.zeros_like(s)
     # average wind speed at Sanner ~38 km/h -> 10.556 m/s
     theta = V[3]
     z = s * np.sin(theta)
     # constant wind shear, 0 m/s at ground up to W1    
-    return 1 * np.ones_like(s)  # np.where(z < H1, W1 * z / H1, W1) 
+    return np.where(z < H1, W1 * z / H1, W1) 
 
 
 def density_atm(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
-                Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05):
+                Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05,
+                wind=True, W1=5, H1=5):
     Ta = Ta0
     Pa = V[4]
     return Pa / (Ra * Ta)
     
 
 def density_fume(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
-                 Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05):
+                 Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05,
+                 wind=True, W1=5, H1=5):
     '''Returns the density of the fumarole, based on ideal gas
     '''
     T  = temperature_fume(s, V)
@@ -112,7 +119,8 @@ def density_fume(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
 
 
 def heat_capacity(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
-                  Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05):
+                  Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05,
+                  wind=True, W1=5, H1=5):
     """
     Define specific heat capacity, Cp, of plume, as a function of the dry air 
       mass fraction, n, for initial 95% of vapour 
@@ -123,7 +131,8 @@ def heat_capacity(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
 
 
 def bulk_gas_constant(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
-                      Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05):
+                      Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05,
+                      wind=True, W1=5, H1=5):
     """
     Define bulk gas constant, Rp, of the plume, as a function of the dry air 
     mass fraction in the plume, n.
@@ -135,7 +144,8 @@ def bulk_gas_constant(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
 
 
 def temperature_fume(s, V, ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
-                     Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05):
+                     Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05,
+                     wind=True, W1=5, H1=5):
     #specific gas constant water vapour: 461.5 J/(kgK)
     """
     Define fumarole plume properties
@@ -201,7 +211,7 @@ def objective_fn(model, data, errors, mode='leastsq', exponentiate=False):
     return 1 - np.exp(-S)
 
 
-def parallel_job(U0, R0, T0, s, d, Cd_inv): 
+def parallel_job(U0, R0, T0, s, d, Cd_inv, args): 
     import warnings
     from scipy.integrate import solve_ivp
 
@@ -217,17 +227,17 @@ def parallel_job(U0, R0, T0, s, d, Cd_inv):
     E0   = Q0 * Cp0 * T0
     V0   = [Q0, M0, E0, np.pi/2, Pa0, .05]
 
-    sol  = solve_ivp(derivs, [s[0], s[-1]], V0, t_eval=s)
+    sol  = solve_ivp(derivs, [s[0], s[-1]], V0, t_eval=s, args=args)
     Gm   = produce_Gm(s, sol)
 
     return objective_fn(Gm, d, Cd_inv, mode='lstsq'), V0
 
 
-def solve_system(x0, s, data, errors):
+def solve_system(x0, s, data, errors, *args):
     """Helper function for the minimisation problem using 
     scipy.optimize.minimize
     """
-    sol = solve_ivp(derivs, [s[0], s[-1]], x0, t_eval=s)
+    sol = solve_ivp(derivs, [s[0], s[-1]], x0, t_eval=s, args=args)
     Gm  = produce_Gm(s, sol)
     return objective_fn(Gm, d, errors, mode='lstsq')
     
@@ -268,7 +278,22 @@ def do_plots(dimensionality, T0, R0, objFn, exponentiate=False):
     return ax0, ax
     
 if __name__ == '__main__':
+    """
+    To run a calculation, do
+    python model_synthdata_inversion.py ncore npts inversion print wind
+
+    parameters
+    ----------
+    ncore : int
+    ngrid : int
+    inversion : bool
+    print : bool
+    wind  : bool
+    """
     import sys
+    from pathlib import Path
+
+    home_str = str(Path.home())
 
     ## Helper functions for plotting
     def get_the_slice(x,y,z, surfacecolor):
@@ -291,8 +316,9 @@ if __name__ == '__main__':
     E0, Pa0, n0
     """
     plt.close('all')
-
+    
     ##  Job options
+    print(sys.argv)
     ncore =  12  # Number of processors/cores
     ngrid = 101  # Number of grid points
     if len(sys.argv) == 2:
@@ -303,13 +329,21 @@ if __name__ == '__main__':
     inversion   = False
     nelder_mead = False
     plots       = False
-    if len(sys.argv) == 4:
+    wind        = False
+    if len(sys.argv) >= 4:
         if sys.argv[3] == 'True':
             inversion = True
+    if len(sys.argv) >= 5:
+        if sys.argv[4] == 'True':
+            plots = True
+    if len(sys.argv) == 6:
+        if sys.argv[5] == 'True':
+            wind = True
+    sigma = .1
 
     R0 = np.linspace(0.1, 1, ngrid)  
-    T0 = np.linspace(80 + Tt, 160 + Tt, ngrid)
-    U0 = np.linspace(0.1, 100, ngrid)
+    T0 = np.linspace(60 + Tt, 140 + Tt, ngrid)
+    U0 = np.linspace(0.1, 20, ngrid)
 
     ##  fixed parameters
     nsol   =   101   # number of points at which "observations" will be made
@@ -329,8 +363,11 @@ if __name__ == '__main__':
     M0true = Q0true * U0true
     E0true = Q0true * Cp0 * T0true
     V0true = [Q0true, M0true, E0true, theta0, Pa0, n0]
+    args   = (.09, .5, 9.81, 1006, 1885, 291, 287, 462, 86000, 0.05,
+              wind, 5, 5)  # ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0,
+                           # wind, W1, H1
  
-    sol_true = solve_ivp(derivs, [s[0], s[-1]], V0true, t_eval=s)
+    sol_true = solve_ivp(derivs, [s[0], s[-1]], V0true, t_eval=s, args=args)
 
     # Produce "true" data values
     sol   = sol_true
@@ -349,7 +386,7 @@ if __name__ == '__main__':
                                1 / sigT**2 * np.ones_like(T)]).ravel())
 
     solp  = np.array([theta, b, T])
-    noise = np.random.randn(*solp.shape)  # Gaussian noise, _N_(0,1)
+    noise = sigma * np.random.randn(*solp.shape)  # Gaussian noise, _N_(0,1)
     sol_noise = (solp.T + noise.T * (sigtheta, sigb, sigT)).T
     d    = sol_noise.flatten()  # array of data
     Gm   = produce_Gm(s, sol)
@@ -361,7 +398,7 @@ if __name__ == '__main__':
         each combination of possible source values.
         """
         # "wrapper" partial function to simplify notation below
-        pj = partial(parallel_job, s=s, d=d, Cd_inv=Cd_inv)
+        pj = partial(parallel_job, s=s, d=d, Cd_inv=Cd_inv, args=args)
         t  = time.perf_counter()
 
         dimensionality = 2
@@ -401,6 +438,17 @@ if __name__ == '__main__':
 
             initialConds = np.array(initialConds)
             objFn = np.array(objFn).reshape((-1, ngrid, ngrid))
+
+        ## Save variables for later
+        save_str = home_str + f'/Modelling/fumarolePlumeModel/' + \
+            f'objFn_soln_{dimensionality}D_{ngrid:04d}pts_{ncore:03d}cores'
+        if wind:
+            save_str += '_wind'
+        np.savez(save_str, R0=R0, T0=T0, U0=U0, objFn=objFn)
+        ## To retrieve variables, use np.load which will parse them as a
+        ## dict-like object, i.e.
+        ## container = np.load(filename)
+        ## R0, T0, U0, objFn = container.values()
 
     if nelder_mead:
         x0  = V0true  # [1, 1, 1, np.pi/2 , 86000, 0.05]
