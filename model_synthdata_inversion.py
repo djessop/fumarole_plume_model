@@ -56,12 +56,12 @@ def derivs(s, V, *args):
     dM  = g * (rhoa - rho) * Q**2 / (rho * M) * np.sin(th) \
         + 2 * rhoa * Q / (np.sqrt(rho * M)) * Ue * W * np.cos(th)
     
+    dth = g * (rhoa - rho) * Q**2 / (rho * M**2) * np.cos(th) \
+        - 2 * rhoa * Q / (M * np.sqrt(rho * M)) * Ue * W * np.sin(th)
+
     dE  = (Ca * Ta + (Ue**2) / 2)* dQ + M**2 / (2 * Q**2) * dQ \
         - rhoa/rho * Q * g * np.sin(th) \
         - 2 * rhoa * np.sqrt(M / rho) * Ue * W * np.cos(th)
-
-    dth = g * (rhoa-rho) * Q**2 / (rho * M**2) * np.cos(th) \
-        - 2 * rhoa * Q / (M * np.sqrt(rho * M)) * Ue * W * np.sin(Q)
 
     dPa = -g * Pa/ (Ra * Ta) * np.sin(th)
 
@@ -345,9 +345,9 @@ if __name__ == '__main__':
             wind = True
     sigma = .01
 
-    R0 = np.linspace(0.1, 2, ngrid)  
+    R0 = np.linspace(0.1, 1, ngrid)  
     T0 = np.linspace(50 + Tt, 150 + Tt, ngrid)
-    U0 = np.linspace(0.1, 20, ngrid)
+    U0 = np.linspace(5, 15, ngrid)
 
     ##  fixed parameters
     nsol   =    51    # number of points at which "observations" will be made
@@ -413,7 +413,7 @@ if __name__ == '__main__':
                  u0, r0, t0, s, d, Cd_inv, *args) for (
                      r0, t0) in list(product(*sequence)))
 
-            print("Job ran in %.3f s using %2d processors" % (
+            print("Job ran in %.2f s using %2d cores" % (
                 time.perf_counter() - t, ncore))
 
             ## Deal out the results
