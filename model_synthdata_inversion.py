@@ -1,10 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Created on Fri Nov 24 09:56:16 2023
-
-Modified by D. E. Jessop, 2024-04-16
-
-@author: klein
+@filename: model_synthdata_inversion.py
+@authors: avklein, dejessop
+@created: Fri Nov 24 09:56:16 2023
 """
 
 from itertools import product
@@ -209,19 +207,21 @@ def objective_fn(model, data, errors, mode='leastsq', exponentiate=False):
     return 1 - np.exp(-S)
 
 
-def parallel_job(U0, R0, T0, s, d, Cd_inv, *args): 
+def parallel_job(U0, R0, T0, W1, s, d, Cd_inv, *args): 
     from scipy.integrate import solve_ivp
 
     # errors/Cd_inv are not passed explicitly as arguements
     warnings.filterwarnings('ignore')
-    ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode = args
+    args = list(args)
+    args[-2] = W1
+    _, _, _, _, Cp0, _, _, _, Pa0, n0, wind, _, H1, mode = args
     V0   = [1, 1, Cp0 * T0, 1, Pa0, n0]  # required for routines
     rho0 = density_fume(0, V0, *args)
     Q0   = rho0 * np.pi * R0**2 * U0
     M0   = Q0 * U0
     E0   = Q0 * Cp0 * T0
-    V0   = [Q0, M0, E0, np.pi/2, Pa0, .05]
-
+    V0   = [Q0, M0, E0, np.pi/2, Pa0, n0]
+    
     ## Extract mode from args if it has been included
     sol  = solve_ivp(derivs, [s[0], s[-1]], V0, t_eval=s, args=args)
     Gm   = produce_Gm(s, sol, *args)
@@ -244,7 +244,7 @@ def solve_system(x0, s, data, errors, *args):
     return objective_fn(Gm, d, errors, mode=mode)
     
 
-def do_plots(dimensionality, T0, R0, objFn, exponentiate=False):
+def do_plots(ndims, T0, R0, objFn, exponentiate=False):
     fig0, ax0 = plt.subplots(figsize=(10*cm, 10*cm))
     ax0.plot(solp.T, s, '-')
     ax0.set_xlabel('Plume parameters')
@@ -257,14 +257,13 @@ def do_plots(dimensionality, T0, R0, objFn, exponentiate=False):
     fig0.tight_layout()
     
     S = objective_fn(Gm, d, Cd_inv, 'leastsq', False)
-    print(f'Value of misfit function: {S}')
-    
+        
     fig, ax = plt.subplots(figsize=(10*cm, 10*cm))
-    if dimensionality == 2:
+    if ndims == 2:
         Ropt_ind, Topt_ind = np.where(objFn == objFn.min())
         im = ax.pcolor(T0, R0, np.exp(-objFn), norm=LogNorm(),
                        label='misfit function')
-    if dimensionality == 3:
+    if ndims == 3:
         Uopt_ind, Ropt_ind, Topt_ind = np.where(objFn == objFn.min())
         im = ax.pcolor(T0, R0, np.exp(-objFn[Uopt_ind]), norm=LogNorm(),
                        label='misfit function')
@@ -288,10 +287,18 @@ if __name__ == '__main__':
     parameters
     ----------
     ncore : int
+       Number of cores/processors to run on
     ngrid : int
+       Number of grid points per parameter (all parameters have equal number 
+       of grid points)
+    ndims : int
+       Number of parameter dimensions for inversion
     inversion : bool
-    print : bool
+       Do invsion
+    plots : bool
+       Show plots after calculations have run
     wind  : bool
+       Include wind in simulations
     """
     import sys
     
@@ -325,6 +332,7 @@ if __name__ == '__main__':
     ##  Job options
     ncore =  12  # Number of processors/cores
     ngrid = 101  # Number of grid points
+    
     if len(sys.argv) == 2:
         ncore   = int(sys.argv[1])
     if len(sys.argv) >= 3:
@@ -334,29 +342,29 @@ if __name__ == '__main__':
     nelder_mead = False
     plots       = False
     wind        = False
+    # Parameter dimensions in which to find solution
+    # 2=(R0, T0), 3=(U0, R0, T0), 4=(W1, U0, R0, T0)
     if len(sys.argv) >= 4:
-        if sys.argv[3] == 'True':
-            inversion = True
+        ndims   = int(sys.argv[3])
     if len(sys.argv) >= 5:
         if sys.argv[4] == 'True':
-            plots = True
-    if len(sys.argv) == 6:
+            inversion = True
+    if len(sys.argv) >= 6:
         if sys.argv[5] == 'True':
+            plots = True
+    if len(sys.argv) == 7:
+        if sys.argv[6] == 'True':
             wind = True
     sigma = 1
 
-    R0 = np.linspace(0.1, 1, ngrid)  
-    T0 = np.linspace(50 + Tt, 150 + Tt, ngrid)
-    U0 = np.linspace(5, 15, ngrid)
-
     ##  fixed parameters
     nsol   =    51    # number of points at which "observations" will be made
-    Cp0    =  1885    # careful, Cp0 will vary with temperatur!e
-    Pa0    = 86000    # Atmospheric pressure at altitude of la Soufriere
-    theta0 = np.pi/2  # Initially vertical plume
-    n0     =     0.05 # Fumarole plumes are always 95% vapour?
-    Ta0    =   291    # Tair 2-year average at Sanner
-    s      = np.linspace(0, 15, nsol)  # Go up to 15 m
+    Cp0    =  1885    # Heat capacity of plume contents
+    Pa0    = 86000    # Atmospheric pressure at vent altitude
+    theta0 = np.pi/2  # Initial plume angle
+    n0     =     0.05 # (Dry) gas content of plume
+    Ta0    = 18 + Tt  # Air temperature at vent altitude
+    s      = np.linspace(0, 15, nsol)  # Follow plume up to 15 m
 
     ##  variables
     rho0true = .5
@@ -367,10 +375,25 @@ if __name__ == '__main__':
     M0true = Q0true * U0true
     E0true = Q0true * Cp0 * T0true
     V0true = [Q0true, M0true, E0true, theta0, Pa0, n0]
-    args   = (.09, .5, 9.81, 1006, 1885, 291, 287, 462, 86000, 0.05,
-              wind, 5, 5, 'abs') #'lstsq')  
+    # Wind profile - simple shear to z=H1, constant wind beyond
+    H1     = 5  # Height for end of shear profile
+    W1 = np.linspace(0, 10, ngrid)             # Wind speed at H1 (= 5 )m
+    args = (.09, .5, 9.81, 1006, 1885, 291, 287, 462, 86000, 0.05,
+                wind, W1[0], H1, 'lstsq')  # 'abs'
+    if ndims < 4:
+        W1   = 5
+        args = (.09, .5, 9.81, 1006, 1885, 291, 287, 462, 86000, 0.05,
+                wind, W1, H1, 'lstsq')  # 'abs'
+    
+
     # ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode
- 
+
+    R0 = np.linspace(0.1, 1, ngrid)             # Vent radius
+    T0 = np.linspace(50 + Tt, 150 + Tt, ngrid)  # Vent temperature
+    U0 = np.linspace(5, 15, ngrid)              # Vent speed
+
+
+
     sol_true = solve_ivp(derivs, [s[0], s[-1]], V0true, t_eval=s, args=args)
 
     # Produce "true" data values
@@ -405,16 +428,15 @@ if __name__ == '__main__':
         pj = partial(parallel_job, s=s, d=d, Cd_inv=Cd_inv, args=args)
         t  = time.perf_counter()
 
-        dimensionality = 2
-        if dimensionality == 2:
+        if ndims == 2:
             u0 = U0true
+            w1 = 5
             sequence = [R0, T0]
             results  = Parallel(n_jobs=ncore)(delayed(parallel_job)(
-                 u0, r0, t0, s, d, Cd_inv, *args) for (
+                 u0, r0, t0, w1, s, d, Cd_inv, *args) for (
                      r0, t0) in list(product(*sequence)))
 
-            print("Job ran in %.2f s using %2d cores" % (
-                time.perf_counter() - t, ncore))
+            tstop = time.perf_counter()
 
             ## Deal out the results
             objFn, initialConds = [], []
@@ -426,13 +448,14 @@ if __name__ == '__main__':
             initialConds = np.array(initialConds)
             objFn = np.array(objFn).reshape((-1, ngrid))
 
-        if dimensionality == 3:
+        if ndims == 3:
             sequence = [U0, R0, T0]
-            results = Parallel(n_jobs=ncore)(delayed(pj)(u0, r0, t0) for (
-                u0, r0, t0) in list(product(*sequence)))
+            w1       = W1
+            results  = Parallel(n_jobs=ncore)(delayed(parallel_job)(
+                 u0, r0, t0, w1, s, d, Cd_inv, *args) for (
+                     u0, r0, t0) in list(product(*sequence)))
 
-            print("Job ran in %.3f s using %2d processors" % (
-                time.perf_counter() - t, ncore))
+            tstop    = time.perf_counter()
 
             ## Deal out the results
             objFn, initialConds = [], []
@@ -444,12 +467,37 @@ if __name__ == '__main__':
             initialConds = np.array(initialConds)
             objFn = np.array(objFn).reshape((-1, ngrid, ngrid))
 
+        if ndims == 4:
+            u0 = U0true
+
+            sequence = [W1, U0, R0, T0]
+            results  = Parallel(n_jobs=ncore)(delayed(parallel_job)(
+                 u0, r0, t0, w1, s, d, Cd_inv, *args) for (
+                     w1, u0, r0, t0) in list(product(*sequence)))
+
+            tstop = time.perf_counter()
+
+            ## Deal out the results
+            objFn, initialConds = [], []
+
+            for result in results:
+                objFn.append(result[0])
+                initialConds.append(result[1])
+
+            initialConds = np.array(initialConds)
+            objFn = np.array(objFn).reshape((ngrid, ngrid, ngrid, ngrid))
+
+
+        print("%dD job ran in %.3f s using %2d processors" % (
+            ndim, tstop - t, ncore))
+
+
         ## Save variables for later
         save_str = home_str + f'/Modelling/fumarolePlumeModel/' + \
-            f'objFn_soln_{dimensionality}D_{ngrid:04d}pts_{ncore:03d}cores'
+            f'objFn_soln_{ndims}D_{ngrid:04d}pts_{ncore:03d}cores'
         if wind:
             save_str += '_wind'
-        np.savez(save_str, R0=R0, T0=T0, U0=U0, objFn=objFn, solp=solp)
+        np.savez(save_str, W1=W1, R0=R0, T0=T0, U0=U0, objFn=objFn, solp=solp)
         ## To retrieve variables, use np.load which will parse them as a
         ## dict-like object, i.e.
         ## container = np.load(filename)
@@ -467,4 +515,4 @@ if __name__ == '__main__':
 
     if plots:
         dp = partial(do_plots, T0=T0, R0=R0, objFn=objFn)
-        dp(dimensionality)
+        dp(ndims)
