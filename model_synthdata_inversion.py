@@ -343,7 +343,7 @@ if __name__ == '__main__':
     if len(sys.argv) == 6:
         if sys.argv[5] == 'True':
             wind = True
-    sigma = .01
+    sigma = 1
 
     R0 = np.linspace(0.1, 1, ngrid)  
     T0 = np.linspace(50 + Tt, 150 + Tt, ngrid)
@@ -368,7 +368,7 @@ if __name__ == '__main__':
     E0true = Q0true * Cp0 * T0true
     V0true = [Q0true, M0true, E0true, theta0, Pa0, n0]
     args   = (.09, .5, 9.81, 1006, 1885, 291, 287, 462, 86000, 0.05,
-              wind, 5, 5, 'lstsq')  
+              wind, 5, 5, 'abs') #'lstsq')  
     # ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode
  
     sol_true = solve_ivp(derivs, [s[0], s[-1]], V0true, t_eval=s, args=args)
