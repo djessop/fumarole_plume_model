@@ -46,9 +46,10 @@ def derivs(s, V, *args):
     W    = wind_profile(s, V, *args)
     rhoa = density_atm(s, V, *args)
     rho  = density_fume(s, V, *args)
-    Ue   = entrainment_vel(s, V, *args)   # entrainment velocity normal to plume axis
+    Ue   = entrainment_vel(s, V, *args)   # entrainment velocity
     Q, M, E, th, Pa, n = V
-
+    
+    ## Definition of derivatives, as per Woodhouse et al., 2013 (JGR)
     dQ  = 2 * rhoa * Ue * Q / (np.sqrt(rho * M))
 
     dM  = g * (rhoa - rho) * Q**2 / (rho * M) * np.sin(th) \
@@ -90,9 +91,10 @@ def wind_profile(s, V, *args):
     if not wind:
         return np.zeros_like(s)
     # average wind speed at Sanner ~38 km/h -> 10.556 m/s
-    theta = V[3]
-    z = s * np.sin(theta)
     # constant wind shear, 0 m/s at ground up to W1    
+    theta = V[3]
+    z = s * np.sin(theta)  # dz/dx = sin(theta) -/-> z = s * sin(theta) !
+
     return np.where(z < H1, W1 * z / H1, W1) 
 
 
@@ -245,6 +247,23 @@ def solve_system(x0, s, data, errors, *args):
     
 
 def do_plots(ndims, T0, R0, objFn, exponentiate=False):
+    ## Helper functions for plotting in plotly
+    def get_the_slice(x,y,z, surfacecolor):
+        return go.Surface(x=x,
+                          y=y,
+                          z=z,
+                          surfacecolor=surfacecolor,
+                          coloraxis='coloraxis')
+
+    def get_lims_colors(surfacecolor):# color limits for a slice
+        return np.min(surfacecolor), np.max(surfacecolor)
+
+
+    def colorax(vmin, vmax):
+        return dict(cmin=vmin,
+                    cmax=vmax)
+
+
     fig0, ax0 = plt.subplots(figsize=(10*cm, 10*cm))
     ax0.plot(solp.T, s, '-')
     ax0.set_xlabel('Plume parameters')
@@ -300,34 +319,16 @@ if __name__ == '__main__':
     wind  : bool
        Include wind in simulations
     """
-    import sys
-    
     from pathlib import Path
-    #from IPython.display import IFrame
+    
+    import sys
 
     home_str = str(Path.home())
-
-    ## Helper functions for plotting
-    def get_the_slice(x,y,z, surfacecolor):
-        return go.Surface(x=x,
-                          y=y,
-                          z=z,
-                          surfacecolor=surfacecolor,
-                          coloraxis='coloraxis')
-
-    def get_lims_colors(surfacecolor):# color limits for a slice
-        return np.min(surfacecolor), np.max(surfacecolor)
-
-
-    def colorax(vmin, vmax):
-        return dict(cmin=vmin,
-                    cmax=vmax)
 
     """
     Solve differential equations for a set of initial values Q0, M0, theta0, 
     E0, Pa0, n0
     """
-    plt.close('all')
     
     ##  Job options
     ncore =  12  # Number of processors/cores
@@ -355,7 +356,6 @@ if __name__ == '__main__':
     if len(sys.argv) == 7:
         if sys.argv[6] == 'True':
             wind = True
-    sigma = 1
 
     ##  fixed parameters
     nsol   =    51    # number of points at which "observations" will be made
@@ -405,7 +405,7 @@ if __name__ == '__main__':
     u     = sol.y[1] / sol.y[0]
     theta = sol.y[3]
 
-    noise_level = 1
+    noise_level = 2
     sigtheta, sigb, sigT = (np.pi / 10 * noise_level,
                             .5 * noise_level, 1 * noise_level)  # rad, m and K
     Cd_inv = np.diag(np.array([1 / sigtheta**2 * np.ones_like(theta),
@@ -413,7 +413,7 @@ if __name__ == '__main__':
                                1 / sigT**2 * np.ones_like(T)]).ravel())
 
     solp  = np.array([theta, b, T])
-    noise = sigma * np.random.randn(*solp.shape)  # Gaussian noise, _N_(0,1)
+    noise = np.random.randn(*solp.shape)  # Gaussian noise, _N_(0,1)
     sol_noise = (solp.T + noise.T * (sigtheta, sigb, sigT)).T
     d    = sol_noise.flatten()  # array of data
     Gm   = produce_Gm(s, sol, *args)
@@ -430,7 +430,7 @@ if __name__ == '__main__':
 
         if ndims == 2:
             u0 = U0true
-            w1 = 5
+            w1 = W1
             sequence = [R0, T0]
             results  = Parallel(n_jobs=ncore)(delayed(parallel_job)(
                  u0, r0, t0, w1, s, d, Cd_inv, *args) for (
@@ -489,7 +489,7 @@ if __name__ == '__main__':
 
 
         print("%dD job ran in %.3f s using %2d processors" % (
-            ndim, tstop - t, ncore))
+            ndims, tstop - t, ncore))
 
 
         ## Save variables for later

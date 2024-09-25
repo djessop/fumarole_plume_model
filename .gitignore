@@ -43,3 +43,5 @@ plumeAnalyserSyntheticVertical_files/
 *.aux
 plumemodel_for_thesis/
 *.np*
+volumetric_plot_plotly.ipynb
+test.html
