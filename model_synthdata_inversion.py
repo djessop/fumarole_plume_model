@@ -228,14 +228,28 @@ def parallel_job(U0, R0, T0, W1, s, d, Cd_inv, *args):
     sol  = solve_ivp(derivs, [s[0], s[-1]], V0, t_eval=s, args=args)
     Gm   = produce_Gm(s, sol, *args)
 
-    return objective_fn(Gm, d, Cd_inv, mode=mode), V0
+    return objective_fn(Gm, d, Cd_inv, mode=mode), V0, W1
 
 
 def solve_system(x0, s, data, errors, *args):
     """Helper function for the minimisation problem using 
     scipy.optimize.minimize
     """
-    sol  = solve_ivp(derivs, [s[0], s[-1]], x0, t_eval=s, args=args)
+    _, _, _, _, Cp0, _, _, _, Pa0, n0, wind, _, H1, mode = args
+    args = list(args)
+    x0p  = x0[:-1]
+    wind = x0[-1]
+    args[-2] = wind
+
+    R0, U0, T0, _ = x0
+    V0   = [1, 1, Cp0 * T0, 1, Pa0, n0]  # required for routines
+    rho0 = density_fume(0, V0, *args)
+    Q0   = rho0 * np.pi * R0**2 * U0
+    M0   = Q0 * U0
+    E0   = Q0 * Cp0 * T0
+    V0   = [Q0, M0, E0, np.pi/2, Pa0, n0]
+
+    sol  = solve_ivp(derivs, [s[0], s[-1]], V0, t_eval=s, args=args)
     Gm   = produce_Gm(s, sol, *args)
 
     ## Extract mode from args if it has been included
@@ -243,7 +257,7 @@ def solve_system(x0, s, data, errors, *args):
     if type(args[-1]) is str:
         mode = args[-1]
 
-    return objective_fn(Gm, d, errors, mode=mode)
+    return objective_fn(Gm, data, errors, mode=mode)
     
 
 def do_plots(ndims, T0, R0, objFn, exponentiate=False):
@@ -399,15 +413,16 @@ if __name__ == '__main__':
     # Produce "true" data values
     sol   = sol_true
     rho   = density_fume(sol.t, sol.y, *args)
-    T     = temperature_fume(sol.t, sol.y, *args) - Tt
+    T     = temperature_fume(sol.t, sol.y, *args) #- Tt
     Cp    = heat_capacity(sol.t, sol.y, *args)
-    b     = sol.y[0] / np.sqrt(rho * sol.y[1])
+    b     = sol.y[0] / np.sqrt(rho * np.pi * sol.y[1])
     u     = sol.y[1] / sol.y[0]
     theta = sol.y[3]
 
-    noise_level = 2
-    sigtheta, sigb, sigT = (np.pi / 10 * noise_level,
-                            .5 * noise_level, 1 * noise_level)  # rad, m and K
+    noise_level = 1
+    sigtheta, sigb, sigT = (np.pi / 10 * noise_level,   # rad
+                            .05 * noise_level,          # m
+                            1 * noise_level)            # K
     Cd_inv = np.diag(np.array([1 / sigtheta**2 * np.ones_like(theta),
                                1 / sigb**2 * np.ones_like(b),
                                1 / sigT**2 * np.ones_like(T)]).ravel())
@@ -439,11 +454,12 @@ if __name__ == '__main__':
             tstop = time.perf_counter()
 
             ## Deal out the results
-            objFn, initialConds = [], []
+            objFn, initialConds, winds = [], [], []
 
             for result in results:
                 objFn.append(result[0])
                 initialConds.append(result[1])
+                winds.append(result[2])
 
             initialConds = np.array(initialConds)
             objFn = np.array(objFn).reshape((-1, ngrid))
@@ -458,11 +474,12 @@ if __name__ == '__main__':
             tstop    = time.perf_counter()
 
             ## Deal out the results
-            objFn, initialConds = [], []
+            objFn, initialConds, winds = [], [], []
 
             for result in results:
                 objFn.append(result[0])
                 initialConds.append(result[1])
+                winds.append(result[2])
 
             initialConds = np.array(initialConds)
             objFn = np.array(objFn).reshape((-1, ngrid, ngrid))
@@ -478,11 +495,12 @@ if __name__ == '__main__':
             tstop = time.perf_counter()
 
             ## Deal out the results
-            objFn, initialConds = [], []
+            objFn, initialConds, winds = [], [], []
 
             for result in results:
                 objFn.append(result[0])
                 initialConds.append(result[1])
+                winds.append(result[2])
 
             initialConds = np.array(initialConds)
             objFn = np.array(objFn).reshape((ngrid, ngrid, ngrid, ngrid))
