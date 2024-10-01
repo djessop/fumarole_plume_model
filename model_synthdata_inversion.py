@@ -47,7 +47,7 @@ def derivs(s, V, *args):
     rhoa = density_atm(s, V, *args)
     rho  = density_fume(s, V, *args)
     Ue   = entrainment_vel(s, V, *args)   # entrainment velocity
-    Q, M, E, th, Pa, n = V
+    Q, M, E, th, Pa, n, x, z = V
     
     ## Definition of derivatives, as per Woodhouse et al., 2013 (JGR)
     dQ  = 2 * rhoa * Ue * Q / (np.sqrt(rho * M))
@@ -66,7 +66,10 @@ def derivs(s, V, *args):
 
     dn  = (1 - n) / Q * dQ  # mass fraction of not steam
 
-    return np.array([dQ, dM, dE, dth, dPa, dn])
+    dx  = np.cos(th)
+    dz  = np.sin(th)
+
+    return np.array([dQ, dM, dE, dth, dPa, dn, dx, dz])
 
 
 def entrainment_vel(s, V, *args): # ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
@@ -75,7 +78,7 @@ def entrainment_vel(s, V, *args): # ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
     ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode = args
     # print(ks, kw)
     W  = wind_profile(s, V, *args)
-    Q, M, _, th, _, _ = V  # Don't need E, Pa, n
+    Q, M, _, th, *_ = V  # Don't need E, Pa, n
     return ks * np.abs(M / Q - W * np.cos(th)) + kw * np.abs(W * np.sin(th))
 
     
@@ -92,8 +95,8 @@ def wind_profile(s, V, *args):
         return np.zeros_like(s)
     # average wind speed at Sanner ~38 km/h -> 10.556 m/s
     # constant wind shear, 0 m/s at ground up to W1    
-    theta = V[3]
-    z = s * np.sin(theta)  # dz/dx = sin(theta) -/-> z = s * sin(theta) !
+    z = V[-1]
+    # z = s * np.sin(theta)  # dz/dx = sin(theta) -/-> z = s * sin(theta) !
 
     return np.where(z < H1, W1 * z / H1, W1) 
 
@@ -217,12 +220,12 @@ def parallel_job(U0, R0, T0, W1, s, d, Cd_inv, *args):
     args = list(args)
     args[-2] = W1
     _, _, _, _, Cp0, _, _, _, Pa0, n0, wind, _, H1, mode = args
-    V0   = [1, 1, Cp0 * T0, 1, Pa0, n0]  # required for routines
+    V0   = [1, 1, Cp0 * T0, 1, Pa0, n0, 0, 0]  # required for routines
     rho0 = density_fume(0, V0, *args)
     Q0   = rho0 * np.pi * R0**2 * U0
     M0   = Q0 * U0
     E0   = Q0 * Cp0 * T0
-    V0   = [Q0, M0, E0, np.pi/2, Pa0, n0]
+    V0   = [Q0, M0, E0, np.pi/2, Pa0, n0, 0, 0]
     
     ## Extract mode from args if it has been included
     sol  = solve_ivp(derivs, [s[0], s[-1]], V0, t_eval=s, args=args)
@@ -242,12 +245,12 @@ def solve_system(x0, s, data, errors, *args):
     args[-2] = wind
 
     R0, U0, T0, _ = x0
-    V0   = [1, 1, Cp0 * T0, 1, Pa0, n0]  # required for routines
+    V0   = [1, 1, Cp0 * T0, 1, Pa0, n0, 0, 0]  # required for routines
     rho0 = density_fume(0, V0, *args)
     Q0   = rho0 * np.pi * R0**2 * U0
     M0   = Q0 * U0
     E0   = Q0 * Cp0 * T0
-    V0   = [Q0, M0, E0, np.pi/2, Pa0, n0]
+    V0   = [Q0, M0, E0, np.pi/2, Pa0, n0, 0, 0]
 
     sol  = solve_ivp(derivs, [s[0], s[-1]], V0, t_eval=s, args=args)
     Gm   = produce_Gm(s, sol, *args)
@@ -388,7 +391,7 @@ if __name__ == '__main__':
     Q0true = rho0true * U0true * R0true**2 * np.pi
     M0true = Q0true * U0true
     E0true = Q0true * Cp0 * T0true
-    V0true = [Q0true, M0true, E0true, theta0, Pa0, n0]
+    V0true = [Q0true, M0true, E0true, theta0, Pa0, n0, 0, 0]
     # Wind profile - simple shear to z=H1, constant wind beyond
     H1     = 5  # Height for end of shear profile
     W1 = np.linspace(0, 10, ngrid)             # Wind speed at H1 (= 5 )m
@@ -405,8 +408,6 @@ if __name__ == '__main__':
     R0 = np.linspace(0.1, 1, ngrid)             # Vent radius
     T0 = np.linspace(50 + Tt, 150 + Tt, ngrid)  # Vent temperature
     U0 = np.linspace(5, 15, ngrid)              # Vent speed
-
-
 
     sol_true = solve_ivp(derivs, [s[0], s[-1]], V0true, t_eval=s, args=args)
 
@@ -526,8 +527,8 @@ if __name__ == '__main__':
         t   = time.perf_counter()
         res = minimize(solve_system, x0=V0true, args=(s, d, Cd_inv),
                        method='Nelder-Mead',
-                       bounds=((0, np.inf), (0, np.inf), (0, np.inf),
-                               (np.pi/2, np.pi/2), (Pa0, Pa0), (n0, n0)))
+                       bounds=((0, None), (0, None), (0, None),
+                               (0, None)))
         print("Solution found using Nelder-Mead in %.3f s" % (
             time.perf_counter() - t))
 
