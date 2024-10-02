@@ -31,9 +31,10 @@ plumeAnalyserSyntheticHorizontal_play2.ipynb
 plumeAnalyserSyntheticHorizontal_play.ipynb
 plumeAnalyserSyntheticVertical.*
 plumeAnalyser.tex
+plumeAnalyserInversion.*
 __pycache__/*
 Untitled.ipynb
-#Woodhouse_model_inversion.ipynb
+Woodhouse_model_inversion.ipynb
 inversion_tests/
 plumeAnalyserSyntheticVertical_files/
 *.pdf
