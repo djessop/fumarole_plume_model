@@ -2,7 +2,7 @@
 # coding=utf-8
 
 """ 
-fumarolePlumeModel.py
+fumarole_plume_model.py
 
 Provides solutions to the model of Aubry et al (2017a)* which models the 
 variation of volume flux, q, momentum flux, m, buoyancy flux, f, and plume 
