@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-bentPlumeAnalyser.py
+bent_plume_analyser.py
 
 A set of utilities to analyse wind-affected (bent) plumes
 
