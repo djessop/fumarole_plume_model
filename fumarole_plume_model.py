@@ -20,7 +20,7 @@ Provided functions:
 
 Model description:
 ------------------
-dx/ds = \cos(\\theta), dz/ds = \sin(\\theta),                    (4)
+dx/ds = \\cos(\\theta), dz/ds = \sin(\\theta),                    (4)
 d(\\rho u r**2)/ds = 2 \\rho_a r u_e,                            (5)
 d(\\rho u**2 r**2)/ds = (\\rho_a - \\rho) g r**2 \\sin(\\theta) 
     + w\\cos(\\theta) d(\\rho u r**2)/ds                          (6)
@@ -92,10 +92,10 @@ to do:
 from scipy.integrate import ode, solve_ivp
 from scipy.interpolate import interp1d
 from scipy.io.matlab import loadmat
-from bentPlumeAnalyser import (plume_trajectory,
-                               dist_along_path,
-                               plume_angle,
-                               true_location_width)
+from bent_plume_analyser import (plume_trajectory,
+                                 dist_along_path,
+                                 plume_angle,
+                                 true_location_width)
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -111,7 +111,7 @@ font = {'family' : 'serif',
 
 eps         = 1e-3
 scaleFactor = 38
-pathname    = '/home/david/Modelling/fumarolePlumeModel/data/'
+pathname    = '/home/david/Modelling/fumarole_plume_model/data/'
 
 # PHYSICAL CONSTANTS
 g = 981                     # CGS
@@ -576,12 +576,12 @@ if __name__ == '__main__':
     n, m = data.shape
     
     # Distance along plume axis and plume angle
-    sexp     = distAlongPath(xexp, zexp)
-    thetaexp, sig_thetaexp = plumeAngle(xexp, zexp, errors=[1/scaleFactor]*2)
+    sexp     = dist_along_path(xexp, zexp)
+    thetaexp, sig_thetaexp = plume_angle(xexp, zexp, errors=[1/scaleFactor]*2)
     
     xexpPix = (xexp - extent[0]) * scaleFactor
     zexpPix = n + (extent[-1] - zexp) * scaleFactor
-    trueLocn, bexp, sig_trueLocn, sig_bexp = trueLocationWidth(
+    true_locn, bexp, sig_true_locn, sig_bexp = true_location_width(
         np.array([xexpPix, zexpPix]).T,
         data,
         errors=[1/scaleFactor])
@@ -633,7 +633,7 @@ if __name__ == '__main__':
     s, V, Q, M, F, theta = (np.array(s), np.array(V), np.array(Q), 
                             np.array(M), np.array(F), np.array(theta))
 
-    filename = pathname + 'fumarolePlumeModel_expt%02d.csv' % run
+    filename = pathname + 'fumarole_plume_model_expt%02d.csv' % run
     try:
         if not os.path.isfile(filename):
             with open(filename, 'w') as fido:
