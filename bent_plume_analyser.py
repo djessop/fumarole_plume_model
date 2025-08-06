@@ -41,7 +41,7 @@ import json
 
 def centroid_posn(x, y, n=2):
     '''
-    Locate the "centre of mass" and spread of a plume, following [1]
+    Locate the "centre of mass" and spread of a 1D profile, following [1]
 
     Parameters
     ----------
@@ -160,18 +160,33 @@ def gaussian_profile(x, offset, amplitude, loc, width):
     return offset + amplitude * np.exp(-.5 * ((x - loc) / width)**2)
 
 
+def image_extent(image_shape, scale_factor=1., cent_loc=None):
+    """
+    Returns the extent of the image given its shape, a scale_factor and centroid location.  These are taken to be 1 and 0, 0 by default.
+    Parameters
+    ----------
+    image_shape : array or list-like
+    scale_factor : float
+    cent_loc : None or tuple
+    """
+    Ox, Oz = 0, 0
+    if cent_loc is not None:
+        Ox, Oz = cent_loc
+    
+    extent_in_pix = np.array([0, image_shape[1], 0, image_shape[0]])
+    extent = np.array([(extent_in_pix[:2] - Ox) / scale_factor,
+                       (extent_in_pix[2:] - Oz) / scale_factor]).flatten()  #[::-1]
+    
+    return extent
+    
 def show_scaled_image(image, scale_factor=1., vent_loc=None,
                       ax=None, cmap=plt.cm.gray):
     """
-    
+    Plots an image, overlaying real-world extents as the axes (as seen in the
+    image plane), returning the extents and axes information.
     """
-    Ox, Oz = 0, 0
-    if vent_loc is not None:
-        Ox, Oz = vent_loc
-    
-    extentInPix = np.array([0, image.shape[1], 0, image.shape[0]])
-    extent = np.array([(extentInPix[:2] - Ox) / scale_factor,
-                       (extentInPix[2:] - Oz)[::-1] / scale_factor]).flatten()
+
+    extent = image_extent(image.shape, scale_factor, vent_loc)
     
     if ax is None:
         fig, ax = plt.subplots()
@@ -202,9 +217,9 @@ def open_plot_expt_image(path, axes, scale_factor=1., exptNo=1,
     # Now calculate the world extent of the data, using a conversion factor 
     # of 38 pixels to 1 cm.  There's probably some neater and more pythonic
     # way of calculating the world extent list but at least it works as is.
-    extentInPix = [0, data.shape[1], 0, data.shape[0]]
-    extent = np.array([(extentInPix[:2] - Ox) / scale_factor,
-                       (Oz - extentInPix[2:]) / scale_factor]).flatten().tolist()
+    extent_in_pix = [0, data.shape[1], 0, data.shape[0]]
+    extent = np.array([(extent_in_pix[:2] - Ox) / scale_factor,
+                       (Oz - extent_in_pix[2:]) / scale_factor]).flatten().tolist()
     xexp = (xexp - Ox) / scale_factor
     zexp = (Oz - zexp) / scale_factor
 

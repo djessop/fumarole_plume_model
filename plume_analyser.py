@@ -4,8 +4,8 @@
 # In[1]:
 
 
-from bentPlumeAnalyser import *
-from fumarolePlumeModel import *
+from bent_plume_analyser import *
+from fumarole_plume_model import *
 from scipy.io.matlab import loadmat
 
 import pandas 

@@ -15,7 +15,7 @@ Provided functions:
     Description of the forward model.
 - wind
     Wind at altitude, z.
-- objectiveFn
+- objective_fn
     Misfit function between the synthetic and "experimental" data.
 
 Model description:
@@ -236,7 +236,7 @@ def wind(s, V):
     return .01
 
 
-def objectiveFn(Vexp, Vsyn, cov=None, p=(.09, .6, .1, 1., None),
+def objective_fn(Vexp, Vsyn, cov=None, p=(.09, .6, .1, 1., None),
                 mode='lsq'):
     """
     Returns the objective (misfit/cost) function as the either (weighted) 
@@ -302,7 +302,7 @@ def objectiveFn(Vexp, Vsyn, cov=None, p=(.09, .6, .1, 1., None),
     return np.exp(-objFn)
 
 
-def objectiveFn2(V0, derivs, p, sexp, dexp, sig_dexp=None, mode='lsq'):
+def objective_fn2(V0, derivs, p, sexp, dexp, sig_dexp=None, mode='lsq'):
     """
     Return the objective (misfit/cost) function as the either sum of 
     square differences between the synthetic and "experimental" data, 
@@ -400,7 +400,7 @@ def objectiveFn2(V0, derivs, p, sexp, dexp, sig_dexp=None, mode='lsq'):
     return kernel
 
 
-def objectiveFn3(V0, derivs, p, sexp, dexp, sig_dexp=None, mode='lsq'):
+def objective_fn3(V0, derivs, p, sexp, dexp, sig_dexp=None, mode='lsq'):
     """
     Return the objective (misfit/cost) function as the either sum of 
     square differences between the synthetic and "experimental" data, 
@@ -446,8 +446,6 @@ def objectiveFn3(V0, derivs, p, sexp, dexp, sig_dexp=None, mode='lsq'):
     - Explicitly pass the covariance matrix
 
     """
-    from scipy.integrate import solve_ivp
-    
     sol = solve_ivp(derivs, [sexp[0], sexp[-1]], V0, args=(p,), t_eval=sexp)
     s, (Q, M, F, theta) = sol.t, sol.y
 
@@ -477,7 +475,7 @@ def objectiveFn3(V0, derivs, p, sexp, dexp, sig_dexp=None, mode='lsq'):
     return -np.exp(-kernel)
 
 
-def loadICsParameters(pathname, run, alpha=.09, beta=.6, m=1.5):
+def load_ics_parameters(pathname, run, alpha=.09, beta=.6, m=1.5):
     """ 
     Returns initial conditions and model parameters determined from CGTA's 
     experimental data
@@ -517,7 +515,7 @@ def loadICsParameters(pathname, run, alpha=.09, beta=.6, m=1.5):
     return V0, p
 
 
-def loadExptData(run):
+def load_expt_data(run):
     # Load the experimental data and image
     dataDirName = pathname + 'ExpPlumes_for_Dai/exp%02d/' % run
     # load the experimental image
