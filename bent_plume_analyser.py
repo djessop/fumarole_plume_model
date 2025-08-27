@@ -254,7 +254,7 @@ def dist_along_path(x, y):
     # a well-defined origin
     s0 = np.sqrt(x[0]**2 + y[0]**2)
     # Add the first point to the cumulative sum of the differences
-    return np.append(0, np.sqrt(dx**2 + dy**2).cumsum()) + s0
+    return np.append(0, np.sqrt(dx**2 + dy**2).cumsum()) #+ s0
 
 
 def plume_angle(x, y, errors=None):
@@ -350,7 +350,7 @@ def rotate_image(img, angle, pivot):
 
 
 def true_location_width(data, mask=None, p=None, scale_factor=1,
-                        errors=None, plotting=False):
+                        errors=None, plotting=False, retrows=False):
     '''
     Returns the "true" location of the plume centroid for 
 
@@ -358,11 +358,20 @@ def true_location_width(data, mask=None, p=None, scale_factor=1,
     ----------
     data : image (NDarray)
         The plume image to be analysed.
+    mask : NDarray (optional)
+        A mask to be applied to the image
     p : array_like (optional)
         A guess (initial or updated) as to the location of the plume axis.
         "p" should be given in pixel values
-    mask : NDarray (optional)
-        A mask to be applied to the image
+    scale_factor : float (optional)
+        pixels per metre scale.  Default is 1.
+    errors : array_like (optional)
+        array of location measurement uncertainties, in pixels.  Default is None, resulting in the 
+        returned width uncertanties being purely a function of the inversion covariance matrix.
+    plotting : bool (optional)
+        plot the progression of the algorithm. Default is False
+    retrows : bool (optional)
+        return the rows of the rotated image from which the plume width is determined.  Default is False
 
     Returns
     -------
@@ -413,7 +422,7 @@ def true_location_width(data, mask=None, p=None, scale_factor=1,
     theta, sig_theta = plume_angle(*p.T, errors=[1 / scale_factor]*2)
 
     # Lists for the var iance of b and d (from covariance matrix)
-    var_b, var_d, d = [], [], []
+    var_b, var_d, d, rows = [], [], [], []
 
     for p_, th in zip(p, theta):
         im_r = rotate_image(data, 90-np.rad2deg(th), p_)  # data[::-1]
@@ -428,6 +437,7 @@ def true_location_width(data, mask=None, p=None, scale_factor=1,
         #row -= row.mean() * rma
         row *= rma
 
+        rows.append(row.tolist())
         # Fit a Gaussian to the data and use this to define plume parameters
         p0   = (0., row.max(), N/2, 50.)
         X = np.arange(len(row))
