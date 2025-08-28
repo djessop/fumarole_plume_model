@@ -219,9 +219,10 @@ def open_plot_expt_image(path, axes, scale_factor=1., exptNo=1,
     # way of calculating the world extent list but at least it works as is.
     extent_in_pix = [0, data.shape[1], 0, data.shape[0]]
     extent = np.array([(extent_in_pix[:2] - Ox) / scale_factor,
-                       (Oz - extent_in_pix[2:]) / scale_factor]).flatten().tolist()
-    xexp = (xexp - Ox) / scale_factor
-    zexp = (Oz - zexp) / scale_factor
+                       (Oz - extent_in_pix[2:]) / scale_factor])
+    extent = extent.flatten().tolist()
+    xexp   = (xexp - Ox) / scale_factor
+    zexp   = (Oz - zexp) / scale_factor
 
     xbar, zbar, x0 = plume_trajectory(data, 2, np.pi/2, scale_factor)
 
@@ -366,12 +367,14 @@ def true_location_width(data, mask=None, p=None, scale_factor=1,
     scale_factor : float (optional)
         pixels per metre scale.  Default is 1.
     errors : array_like (optional)
-        array of location measurement uncertainties, in pixels.  Default is None, resulting in the 
-        returned width uncertanties being purely a function of the inversion covariance matrix.
+        array of location measurement uncertainties, in pixels.  Default is
+        None, resulting in the returned width uncertanties being purely a
+        function of the inversion covariance matrix.
     plotting : bool (optional)
         plot the progression of the algorithm. Default is False
     retrows : bool (optional)
-        return the rows of the rotated image from which the plume width is determined.  Default is False
+        return the rows of the rotated image from which the plume width is
+        determined.  Default is False
 
     Returns
     -------
@@ -495,10 +498,17 @@ def true_location_width(data, mask=None, p=None, scale_factor=1,
     d = np.array(d)
     if errors is not None:
         sig_true_locn = np.sqrt(2 * errors[0]**2 + var_d + d**2 * sig_theta)
-        return (np.array(true_locn), np.abs(np.array(plume_width)),
-                sig_true_locn, np.sqrt(var_b))
-    else:
-        return np.array(true_locn), np.abs(np.array(plume_width))
+        if retrows:
+            return (np.array(true_locn), np.abs(np.array(plume_width)),
+                    sig_true_locn, np.sqrt(var_b), rows)
+        else:
+            return (np.array(true_locn), np.abs(np.array(plume_width)),
+                    sig_true_locn, np.sqrt(var_b))
+    elif errors is None:
+        if retrows:
+            np.array(true_locn), np.abs(np.array(plume_width)), rows
+        else:  # default behaviour
+            return np.array(true_locn), np.abs(np.array(plume_width))
 
 
 def path_from_smoothed_theta(s, theta, snew, smoothing=0.): 
@@ -522,7 +532,33 @@ def pixel_to_world_posns(pixel_posns, offset, scale_factor=1):
 
 def world_to_pixel_posns(world_posns, offset, scale_factor=1):
     return world_posns * [1, -1] * scale_factor + offset
-    
+
+
+def read_params_file(params_file):
+    import json
+
+    with open(params_file, 'r') as f:
+        params = json.load(f)
+
+    return params
+
+
+def save_params_file(params, params_file):
+    from datetime import datetime as dt
+    import json
+    from os.path import getctime, isfile
+    from os import rename
+
+    dfmt = '%Y%m%d'
+    timenow_str = dt.now().strftime(dfmt)
+    timecrn_str = dt.fromtimestamp(getctime(params_file)).strftime(dfmt)
+    if isfile(params_file) and not isfile(params_file + '.' + timecrn_str):
+        rename(params_file, params_file + '.' + timecrn_str)
+    with open(params_file, 'w') as f:
+        params = json.dump(params, f)
+
+    return 
+
 
 if __name__ == '__main__':
     plt.close('all')    # Clear pre-existing plots
