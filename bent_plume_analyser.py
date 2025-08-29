@@ -378,10 +378,17 @@ def true_location_width(data, mask=None, p=None, scale_factor=1,
 
     Returns
     -------
-    true_locn : 1D array like
+    true_locn : 1D array_like
         The "true" location of the plume centroid
-    plume_width : 1D array like
+    plume_width : 1D array_like
         The width at location trueLocn[i] and angle theta[i]
+    sig_true_locn : 1D array_like
+        Uncertainties associated with the plume location 
+    sig_width : 1D array_like
+        The std dev. of the plume width from fitting a gaussian to the plume
+        intensity data at each point along its axis.
+    rows : array_like
+        The intensity data along an axis perpendicular to the plume motion.
 
     See also
     --------
@@ -524,6 +531,26 @@ def path_from_smoothed_theta(s, theta, snew, smoothing=0.):
         xnew.append(xnew[-1] + dx) 
         znew.append(znew[-1] + dz) 
     return np.array(xnew), np.array(znew), thetaNew
+
+
+def extract_temperatures(image, params_file, rows=None, mode='max'):
+    params = read_params_file(params_file)
+
+    if rows is None:
+        p     = np.array(params['trajectory'])
+        sexp  = dist_along_path(*p.T)
+        thexp = plume_angle(*p.T)
+        rows  = []
+    else:
+        for row in rows:
+            offs = row.mean()
+            ampl = row.max()
+            locn = np.argmax(row)
+            wide = 50
+            popt, pcov = curve_fit(gaussian_profile, )
+            offset + amplitude * np.exp(-.5 * ((x - loc) / width)**2)
+
+    return
 
 
 def pixel_to_world_posns(pixel_posns, offset, scale_factor=1):
