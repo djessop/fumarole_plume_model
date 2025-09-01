@@ -34,10 +34,11 @@ from scipy.optimize import curve_fit
 import numpy as np
 import matplotlib.pyplot as plt
 import json 
+import os
 
 
 # scale_factor = 38.               # Conversion factor/[pix/cm]
-
+thermography='/home/david/FieldWork/Soufriere-Guadeloupe/Thermography'
 
 def centroid_posn(x, y, n=2):
     '''
@@ -431,6 +432,8 @@ def true_location_width(data, mask=None, p=None, scale_factor=1,
     # "section" at each location from a Gaussian fit.
     theta, sig_theta = plume_angle(*p.T, errors=[1 / scale_factor]*2)
 
+    print(theta)
+
     # Lists for the var iance of b and d (from covariance matrix)
     var_b, var_d, d, rows = [], [], [], []
 
@@ -585,6 +588,109 @@ def save_params_file(params, params_file):
         params = json.dump(params, f)
 
     return 
+
+
+def _line(x, y, th, width=.5):
+    x_ = np.array([-width, width])
+    y_ = (x_) / np.tan(-th)
+    return x_ + x, y_ + y
+
+
+def plume_analysis(date, site, thermography=thermography):
+    """
+    Utility for extracting data from thermal images
+    """
+    import tifffile
+    
+    path = '/'.join([thermography, date + '_' + site])
+    im_path = path + '/' + date.replace('-', '') + '_' + site + '_imAve_bt.tif'
+    data = tifffile.imread(im_path)
+    # data = np.flipud(data)
+    params_file = path + '/parameters.json'
+    
+    params = read_params_file(params_file)
+    
+    extent       = params['extent']
+    trajectory   = params['trajectory']
+    scale_factor = params['scale_factor']
+    
+    vent_loc     = params['vent_loc']
+    image_shape  = params['image_shape']
+    
+    vent_loc[1]  = image_shape[0] - vent_loc[1]
+    extent       = image_extent(image_shape, scale_factor, vent_loc)
+    
+    trajectory   = np.array(trajectory)
+    trajectory[:,1] = image_shape[0] - trajectory[:,1]
+    
+    real_trajectory = (trajectory - [vent_loc[0], vent_loc[1]]) * 1/scale_factor
+    p = real_trajectory.copy()
+    
+    #####################
+    # EXTRACT VARIABLES #
+    #####################
+    # thexp, sig_thexp = plume_angle(p[:,0], p[:,1], errors=[1/scale_factor]*2)
+    # thexp[0] = np.pi/2
+    true_loc, bexp, sig_p, \
+        sig_bexp, rows = true_location_width(data,
+                                             p=p,
+                                             errors=[1/scale_factor],
+                                             retrows=True)
+    # Texp      = 
+    sexp      = dist_along_path(*p.T)  #[:,0], p[:,1])
+        
+    ############
+    # Plotting #
+    ############
+    fig, axes = plt.subplots(ncols=2, sharey=False)
+    extent, im, ax = show_scaled_image(data, scale_factor, vent_loc, ax=axes[0])
+    # ax.plot(0, 0, 'or')  # vent location
+    
+    ## DEFINE THE DISTANCE ALONG THE AXIS, THE ANGLE AND THE WIDTH OF THE PLUME
+    pPixels = p.copy() * scale_factor + vent_loc
+    pPixels *= [1, -1]
+    pPixels += [0, 2*n]
+    
+    ax.plot(p[:,0], p[:,1], '--.r', lw=.8)
+    ax.set_xlabel('Horizontal distance/[m]')
+    ax.set_ylabel('Vertical distance/[m]')
+    ax.set_title('Time-averaged TIR image')
+    ax.xaxis.set_minor_locator(MultipleLocator(1))
+    ax.yaxis.set_minor_locator(MultipleLocator(1))
+    
+    thexp, sig_thexp = plume_angle(p[:,0], p[:,1], errors=[1/scale_factor]*2)
+    _, bexp, sig_p, sig_bexp = true_location_width(data, p=pPixels, errors=[1/scale_factor])
+    sexp      = dist_along_path(p[:,0], p[:,1])
+    bexp     /= scale_factor
+    sig_bexp /= scale_factor
+
+    for th, p_ in zip(thexp, p):
+        xs, ys = p_
+        x_, y_ = _line(xs, ys, th, width=.8)
+        ax.plot(x_, y_, '--r', lw=.5)
+    
+    axes[1].errorbar(bexp, sexp, ls='none', marker='.', c='k', xerr=sig_bexp)
+    axes[1].set_xlabel('Plume width/[m]')
+    axes[1].set_ylabel('Distance along plume axis/[m]')
+    axes[1].set_title('Plume parameters')
+    
+    fig.suptitle(f'{date}, {site}');
+    fig.savefig(path + f'/{date}_{site}_analysis.png');
+
+    ###############
+    # UPDATE JSON #
+    ###############
+    params['real_trajectory'] = real_trajectory.tolist()
+    params['sexp'] = sexp.tolist()
+    params['bexp'] = bexp.tolist()
+    params['sig_bexp'] = sig_bexp.tolist()
+    
+    if os.path.isfile(params_file):
+        if not os.path.isfile(params_file + '.' + dt.now().strftime('%Y%m%d')):
+            os.rename(params_file, params_file + '.' + dt.now().strftime('%Y%m%d'))
+    save_params_file(params, params_file)
+
+    return
 
 
 if __name__ == '__main__':
