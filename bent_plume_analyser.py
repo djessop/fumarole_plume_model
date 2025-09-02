@@ -161,24 +161,127 @@ def gaussian_profile(x, offset, amplitude, loc, width):
     return offset + amplitude * np.exp(-.5 * ((x - loc) / width)**2)
 
 
-def image_extent(image_shape, scale_factor=1., cent_loc=None):
+def calc_scale_factor(params):
+    try:
+        dist_to_vent = params['dist_to_vent']
+        IFOV         = params['IFOV']
+    except KeyError: 
+        raise Warning('One of "dist_to_vent", "IFOV" not in params')
+
+    return 1. / (2 * dist_to_vent * np.arctan(IFOV / 2))  # pix/m
+
+
+def image_extent(params):  #image_shape, scale_factor=1., vent_loc=None):
     """
-    Returns the extent of the image given its shape, a scale_factor and centroid location.  These are taken to be 1 and 0, 0 by default.
+    Returns the extent of the image given its shape, a scale_factor and
+    centroid location.  These are taken to be 1 and 0, 0 by default.
+
     Parameters
     ----------
     image_shape : array or list-like
     scale_factor : float
-    cent_loc : None or tuple
+    vent_loc : None or tuple
     """
+    image_shape  = [1, 1]
+    scale_factor = 1
+    vent_loc     = None
+    try:
+        image_shape  = params['image_shape']
+        scale_factor = params['scale_factor']
+        vent_loc     = params['vent_loc']
+    except KeyError:
+        raise Warning('One of "image_shape", "scale_factor" or "vent_loc" '\
+                      'missing from params')
     Ox, Oz = 0, 0
-    if cent_loc is not None:
-        Ox, Oz = cent_loc
+    if vent_loc is not None:
+        Ox, Oz = vent_loc
     
-    extent_in_pix = np.array([0, image_shape[1], 0, image_shape[0]])
+    extent_in_pix = np.array([0, image_shape[1], image_shape[0], 0])
     extent = np.array([(extent_in_pix[:2] - Ox) / scale_factor,
-                       (extent_in_pix[2:] - Oz) / scale_factor]).flatten()  #[::-1]
+                       (Oz - extent_in_pix[2:]) / scale_factor]).flatten()
+
+    return extent     #[::-1]
+
+
+def pixel_to_world(p, params): #p, scale_factor, vent_loc, image_shape):
+    """
+    Returns "real-world" positions (in units of metres), with the vent at
+    (0, 0).
+
+    Parameters
+    ----------
+    p : list or array_like
+    params : dict
+        Contains the fields scale_factor, vent_loc, image_shape
     
-    return extent
+
+    Returns
+    -------
+    world_p : array_like
+        Cartesian positions in units of metres, with origin at vent
+
+    See also
+    --------
+    world_to_pixel, initial_guess_at_axis
+    """
+    try:
+        p            = np.array(p)
+        scale_factor = params['scale_factor']
+        vent_loc     = params['vent_loc']
+        image_shape  = params['image_shape']
+    except KeyError: 
+        raise Warning('One of "scale_factor", "vent_loc" or "image_shape" '\
+                      'not in params')
+
+    # If necessay, transpose trajectory to two rows of N data points
+    if p.shape[1] == 2:
+        p = p.T
+    p_x, p_y = p
+    
+    x = (p_x - vent_loc[0]) / scale_factor
+    y = (image_shape[0] - p_y - vent_loc[1]) / scale_factor
+    return np.vstack([x, y]).T
+    
+
+def world_to_pixel(world_p, params):
+    """
+    Transforms real-world positions within the image plane in terms of pixels, 
+    i.e. the inverse of real_to_pixel.
+
+    Parameters
+    ----------
+    world_p : array_like
+    scale_factor : float
+    vent_loc : array_like
+    image_shape : array_like
+
+    Returns
+    -------
+    pixel_p : array_like
+        Positions in pixels (wrt TL corner of image)
+
+    See also
+    --------
+    world_to_pixel
+    """
+    try:
+        real_p       = np.array(real_p)
+        scale_factor = params['scale_factor']
+        vent_loc     = params['vent_loc']
+        image_shape  = params['image_shape']
+    except KeyError: 
+        raise Warning('One of "scale_factor", "vent_loc" or "image_shape" '\
+                      'not in params')
+
+    # If necessay, transpose trajectory to two rows of N data points
+    if world_p.shape[1] == 2:
+        world_p = world_p.T
+    x, y = real_p
+    
+    p_x = vent_loc[0] + x * scale_factor
+    p_y = (image_shape[0] - vent_loc[1]) - y * scale_factor
+    return np.vstack([p_x, p_y]).T
+
     
 def show_scaled_image(image, scale_factor=1., vent_loc=None,
                       ax=None, cmap=plt.cm.gray):
@@ -286,18 +389,16 @@ def plume_angle(x, y, errors=None):
     numpy.arctan2
     """
     try:
-        # Basic functionality: calculate only angle
-        dy = np.gradient(y, edge_order=2)
-        dx = np.gradient(x, edge_order=2)
+        dy    = np.gradient(y, edge_order=2)
+        dx    = np.gradient(x, edge_order=2)
         theta = np.arctan2(dy, dx)
     except ValueError:
         theta = None
 
     if errors is not None:
-        # Advanced functionality: calculate measurement error
         denom     = dx**2 + dy**2
-        dfdx      = - dy / denom
-        dfdy      =   dx / denom
+        dfdx      = dy / denom  # -ve ignored as dfdx squared when used
+        dfdy      = dx / denom
         sig_theta = np.sqrt((dfdx * errors[0])**2 + (dfdy * errors[1])**2)
         return theta, sig_theta
     else:    
@@ -432,7 +533,7 @@ def true_location_width(data, mask=None, p=None, scale_factor=1,
     # "section" at each location from a Gaussian fit.
     theta, sig_theta = plume_angle(*p.T, errors=[1 / scale_factor]*2)
 
-    print(theta)
+    print(f"$\\theta$ = {theta}")
 
     # Lists for the var iance of b and d (from covariance matrix)
     var_b, var_d, d, rows = [], [], [], []
@@ -554,14 +655,6 @@ def extract_temperatures(image, params_file, rows=None, mode='max'):
             offset + amplitude * np.exp(-.5 * ((x - loc) / width)**2)
 
     return
-
-
-def pixel_to_world_posns(pixel_posns, offset, scale_factor=1):
-    return (pixel_posns - offset) * [1, -1] / scale_factor
-
-
-def world_to_pixel_posns(world_posns, offset, scale_factor=1):
-    return world_posns * [1, -1] * scale_factor + offset
 
 
 def read_params_file(params_file):
@@ -687,7 +780,8 @@ def plume_analysis(date, site, thermography=thermography):
     
     if os.path.isfile(params_file):
         if not os.path.isfile(params_file + '.' + dt.now().strftime('%Y%m%d')):
-            os.rename(params_file, params_file + '.' + dt.now().strftime('%Y%m%d'))
+            os.rename(params_file, params_file + '.' +
+                      dt.now().strftime('%Y%m%d'))
     save_params_file(params, params_file)
 
     return
@@ -719,7 +813,7 @@ if __name__ == '__main__':
         leg  = ax.legend()
         leg.get_frame().set_facecolor('gray')                                   
     except TypeError:
-        print('file %s doesn\'t seem to exist...skipping!' % fname)
+        raise Warning(f'file {fname} does not exist...skipping!')
 
     #p       = initial_guess_at_axis()  # Comment out if loading from file
     pPixels = p.copy() * scale_factor
