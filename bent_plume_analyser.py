@@ -23,8 +23,8 @@ Provides functions:
     rotates an image by a given angle.
 - true_location_width    
 - path_from_smoothed_theta
-- pixel_to_world_posns
-- world_to_pixel_posns
+- pixel_to_world
+- world_to_pixel
 """
 from scipy.io.matlab import loadmat
 from scipy.interpolate import interp1d, splrep, splev
@@ -233,14 +233,11 @@ def pixel_to_world(p, params): #p, scale_factor, vent_loc, image_shape):
         raise Warning('One of "scale_factor", "vent_loc" or "image_shape" '\
                       'not in params')
 
-    # If necessay, transpose trajectory to two rows of N data points
-    if p.shape[1] == 2:
+    # Transpose array if not Nx2
+    if p.shape[1] != 2:
         p = p.T
-    p_x, p_y = p
-    
-    x = (p_x - vent_loc[0]) / scale_factor
-    y = (image_shape[0] - p_y - vent_loc[1]) / scale_factor
-    return np.vstack([x, y]).T
+
+    return (p - vent_loc) * [1, -1] / scale_factor
     
 
 def world_to_pixel(world_p, params):
@@ -265,7 +262,7 @@ def world_to_pixel(world_p, params):
     world_to_pixel
     """
     try:
-        real_p       = np.array(real_p)
+        world_p      = np.array(world_p)
         scale_factor = params['scale_factor']
         vent_loc     = params['vent_loc']
         image_shape  = params['image_shape']
@@ -273,14 +270,11 @@ def world_to_pixel(world_p, params):
         raise Warning('One of "scale_factor", "vent_loc" or "image_shape" '\
                       'not in params')
 
-    # If necessay, transpose trajectory to two rows of N data points
-    if world_p.shape[1] == 2:
+    # Transpose array if not Nx2
+    if world_p.shape[1] != 2:
         world_p = world_p.T
-    x, y = real_p
-    
-    p_x = vent_loc[0] + x * scale_factor
-    p_y = (image_shape[0] - vent_loc[1]) - y * scale_factor
-    return np.vstack([p_x, p_y]).T
+
+    return vent_loc + world_p * [1, -1] * scale_factor
 
     
 def show_scaled_image(image, scale_factor=1., vent_loc=None,
@@ -480,7 +474,7 @@ def true_location_width(data, mask=None, p=None, scale_factor=1,
 
     Returns
     -------
-    true_locn : 1D array_like
+    true_locn : 2D array_like
         The "true" location of the plume centroid
     plume_width : 1D array_like
         The width at location trueLocn[i] and angle theta[i]
@@ -703,20 +697,20 @@ def plume_analysis(date, site, thermography=thermography):
     
     params = read_params_file(params_file)
     
+    trajectory   = np.array(params['trajectory'])
     extent       = params['extent']
-    trajectory   = params['trajectory']
     scale_factor = params['scale_factor']
     
     vent_loc     = params['vent_loc']
     image_shape  = params['image_shape']
     
     vent_loc[1]  = image_shape[0] - vent_loc[1]
-    extent       = image_extent(image_shape, scale_factor, vent_loc)
+    extent       = image_extent(params)
     
-    trajectory   = np.array(trajectory)
-    trajectory[:,1] = image_shape[0] - trajectory[:,1]
+    #trajectory   = np.array(trajectory)
+    #trajectory[:,1] = image_shape[0] - trajectory[:,1]
     
-    real_trajectory = (trajectory - [vent_loc[0], vent_loc[1]]) * 1/scale_factor
+    real_trajectory = pixel_to_world(trajectory, params)
     p = real_trajectory.copy()
     
     #####################
