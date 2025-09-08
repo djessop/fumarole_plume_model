@@ -1,704 +1,537 @@
-#!/usr/bin/env python3
-# coding=utf-8
-
-""" 
-fumarole_plume_model.py
-
-Provides solutions to the model of Aubry et al (2017a)* which models the 
-variation of volume flux, q, momentum flux, m, buoyancy flux, f, and plume 
-angle, :math: `\\theta' which describe the rise of a buoyant plume subject to a side 
-wind. 
-
-Provided functions:
--------------------
-- derivs
-    Description of the forward model.
-- wind
-    Wind at altitude, z.
-- objective_fn
-    Misfit function between the synthetic and "experimental" data.
-
-Model description:
-------------------
-dx/ds = \\cos(\\theta), dz/ds = \sin(\\theta),                    (4)
-d(\\rho u r**2)/ds = 2 \\rho_a r u_e,                            (5)
-d(\\rho u**2 r**2)/ds = (\\rho_a - \\rho) g r**2 \\sin(\\theta) 
-    + w\\cos(\\theta) d(\\rho u r**2)/ds                          (6)
-(\\rho u**2 r**2) d\\theta/ds = (\\rho_a - \\rho) g r**2 \\cos(\\theta) 
-    - w\\sin(\\theta) d(\\rho u r**2)/ds                          (7)
-d(g'ur**2)/ds = -N**2 u r**2 \\sin(\\theta),                     (8)
-
-with
-    g'  = g (\\rho_a - \\rho) / \\rho_a,
-    u_e = \\alpha_e |u - w\\sin\\theta| + \\beta_e |w\\cos\\theta|
-    N   = \\sqrt{-g/\\rho_0 d\\rho/dz}
-
-Note that \\theta is measured relative to the horizontal plane.  
-
-Applying the Boussinesq approximation (density variations are small enough to 
-be negligible, except when a density term is multiplied by gravity) and upon 
-making the following substitutions:
-Q = u r**2, M = u**2 r**2, F = g' u r**2,
-we obtain
-dQ/ds = 2 Q/\\sqrt{M} (\\alpha_e\\abs{M/Q - w\\cos\\theta} 
-	+ \beta_e\\abs{w\\sin\\theta})
-dM/ds = FQ/M\\sin\\theta + w\\cos\\theta dQ/ds
-dF/ds = -N**2 \\sqrt{M} \\sin\\theta
-d\theta/ds = FQ/M**2\\cos\\theta - w/M\\sin\\theta dQ/ds
-
-References:
------------
-* Aubry, T. J., Carazzo, G., & Jellinek, A. M. (2017a). 
-Turbulent entrainment into volcanic plumes: new constraints from laboratory
-experiments on buoyant jets rising in a stratified crossflow. 
-Geophys. Res. Lett., 44, 10,198--10,207.
-https://dx.doi.org/10.1002/2017GL075069
-
-see also:
-Aubry, T. J., Jellinek, A. M., Carazzo, G., Gallo, R., Hatcher, K., 
-Dunning, J. (2017b)
-A new analytical scaling for turbulent wind-bent plumes: comparison of scaling 
-laws with analog experiments and a new database of eruptive conditions for 
-predicting the height of volcanic plumes
-J. Volcanol. Geotherm. Res., 343, 233--251
-http://dx.doi.org/10.1016/j.jvolgeores.2017.07.006
-
-Woodhouse, M. J., A. J. Hogg, J. C. Phillips, and R. S. J. Sparks (2013)
-Interaction between volcanic plumes and wind during the 2010 Eyjafjallaj\"okull
-eruption, Iceland
-J. Geophys. Res. Solid Earth, 118, 92--109
-https://dx.doi.org/10.1029/2012JB009592
-
-changes log:
-------------
-2018-06-25      Clipping model range to be equal to the experimental data
-2018-06-26      Introduced command line option to plot data.  
-                Introduced "main()" function to contain the bod
-2019-05-09      Rewriting objective function to allow scipy.optimize.fmin to 
-                call it
-                
-to do:
-------
-- Calculate experimental plume widths etc. in local reference (i.e. rotated)
-  reference frame.
-- Interpolate model data to be evaluated at same points as the experimental 
-  data.
-- Compare experimental and model data.
-- Something odd happening in models of most expts: predicted plume trajectory
-  changes direction quite abruptly.  Derivitives (theta) change sign here.
-  Stop the calculation at this point?xs
+# -*- coding: utf-8 -*-
+"""
+@filename: model_synthdata_inversion.py
+@authors: avklein, dejessop
+@created: Fri Nov 24 09:56:16 2023
 """
 
-from scipy.integrate import ode, solve_ivp
-from scipy.interpolate import interp1d
-from scipy.io.matlab import loadmat
-from bent_plume_analyser import (plume_trajectory,
-                                 dist_along_path,
-                                 plume_angle,
-                                 true_location_width)
+from itertools import product
+from myiapws import iapws1992, iapws1995
+from matplotlib import pyplot as plt
+from matplotlib.colors import LogNorm
+#from mpl_toolkits import mplot3d
+from scipy.integrate import solve_ivp
+from scipy.optimize import minimize
+from joblib import Parallel, delayed
+from functools import partial
 
 import numpy as np
-import matplotlib.pyplot as plt
-import os, sys
-import pandas
+import time
+import warnings
+#import pandas as pd
+#import plotly.graph_objects as go
 
-# Set matplotlib font to be "computer modern" and use TeX rendering
-font = {'family' : 'serif',
-        'serif': ['computer modern roman']}
-#        'fontsize': 16}
-# plt.rc('font', **font)
-# plt.rc('text', usetex=True)
 
-eps         = 1e-3
-scaleFactor = 38
-pathname    = '/home/david/Modelling/fumarole_plume_model/data/'
+Tt = iapws1995.Tt  # Triple point of water
+cm = 1/2.54
 
-# PHYSICAL CONSTANTS
-g = 981                     # CGS
+
+def derivs(s, V, *args):
+    #Ca 1001 J/kg/K, Cp water vapour at 95°C, 1880 J/kg/K:
+    #https://www.engineeringtoolbox.com/water-vapor-d_979.html
+    """
+    axial distance s, state vector V, 
+    entrainment coefficient without wind ks, entrainment coefficient with wind 
+    kw (from Woodhouse et al. 2013)
+    specific heat capacity of atmosphere Ca, Specific heat capacity of plume Cp
+    Air temperature (K) Ta0: average air T Sanner last 2 years
+    specific gas constant of dry air Ra = 287 J/kg/K
+    specific gas constant of water vapour Rp = 461.5 J/kg/K
+
+    order of state vector V:  Q, M, th, E, Pa, n (mass flux, momentum flux, 
+    plume angle, enthalpy flux, atmospheric pressure, mass fraction air)
+    """
+    ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode = args 
+    Ta   = Ta0
+    W    = wind_profile(s, V, *args)
+    rhoa = density_atm(s, V, *args)
+    rho  = density_fume(s, V, *args)
+    Ue   = entrainment_vel(s, V, *args)   # entrainment velocity
+    Q, M, E, th, Pa, n, x, z = V
+    
+    ## Definition of derivatives, as per Woodhouse et al., 2013 (JGR)
+    dQ  = 2 * rhoa * Ue * Q / (np.sqrt(rho * M))
+
+    dM  = g * (rhoa - rho) * Q**2 / (rho * M) * np.sin(th) \
+        + 2 * rhoa * Q / (np.sqrt(rho * M)) * Ue * W * np.cos(th)
+    
+    dth = g * (rhoa - rho) * Q**2 / (rho * M**2) * np.cos(th) \
+        - 2 * rhoa * Q / (M * np.sqrt(rho * M)) * Ue * W * np.sin(th)
+
+    dE  = (Ca * Ta + (Ue**2) / 2)* dQ + M**2 / (2 * Q**2) * dQ \
+        - rhoa/rho * Q * g * np.sin(th) \
+        - 2 * rhoa * np.sqrt(M / rho) * Ue * W * np.cos(th)
+
+    dPa = -g * Pa/ (Ra * Ta) * np.sin(th)
+
+    dn  = (1 - n) / Q * dQ  # mass fraction of not steam
+
+    dx  = np.cos(th)
+    dz  = np.sin(th)
+
+    return np.array([dQ, dM, dE, dth, dPa, dn, dx, dz])
+
+
+def entrainment_vel(s, V, *args): # ks=0.09, kw=0.5, g=9.81, Ca=1006, Cp0=1885,
+                    # Ta0=291, Ra=287, Rp0=462, Pa0=86000, n0=0.05,
+                    # wind=True, W1=5, H1=5, mode='leastsq'):
+    ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode = args
+    # print(ks, kw)
+    W  = wind_profile(s, V, *args)
+    Q, M, _, th, *_ = V  # Don't need E, Pa, n
+    return ks * np.abs(M / Q - W * np.cos(th)) + kw * np.abs(W * np.sin(th))
 
     
-def derivs(s, V, p=(.09, .6, .1, 1., None)):
-    """ 
-    Description of the forward model.  Returns the derivatives of the state 
-    vector, V, for the Aubry et al., 2017 (GRL) wind-bent plume model.  
-    V contains the following state variables:
-    Q           volume flux (specific mass flux) = b**2 u
-    M           specific momentum flux = b**2 u**2
-    F           specific buoyancy flux = b**2 u g' 
-    :math: `\\theta'      local deflection of the plume axis with respect to 
-        vertical
+def wind_profile(s, V, *args): 
+    """
+    Define atmospheric properties:
+    wind speed: wind_profile(s,V): constant wind shear between ground and 
+    height H1, then constant speed W1
+    air density: density_atm depending on spec. gas constant of air Ra and air 
+    temperature Ta (assumed constant at about 18 deg C)
+    """
+    ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode = args
+    if not wind:
+        return np.zeros_like(s)
+    # average wind speed at Sanner ~38 km/h -> 10.556 m/s
+    # constant wind shear, 0 m/s at ground up to W1    
+    z = V[-1]
+    # z = s * np.sin(theta)  # dz/dx = sin(theta) -/-> z = s * sin(theta) !
+
+    return np.where(z < H1, W1 * z / H1, W1) 
+
+
+def density_atm(s, V, *args):
+    ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode = args
+    Ta = Ta0
+    Pa = V[4]
+    return Pa / (Ra * Ta)
     
-    Parameters
-    ----------
-    s	distance along the plume axis
-    V   state variable consisting of q, m, f and :math: `\\theta'
-    p   tuple containing model parameters:
-        alpha   perpendicular entrainment coefficient (default = 0.09)
-        beta    wind entrianment coefficient (0.6)
-        N       Brunt-Väisälä frequency for the stratified environment (0.1)
-        m       Devenish's coefficient, used in calculating u_e (1.0)
-        w       "wind" option.  If None, the function wind will be called.
+
+def density_fume(s, V, *args):
+    '''Returns the density of the fumarole, based on ideal gas
+    '''
+    ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode = args
+    T  = temperature_fume(s, V, *args)
+    Pa = V[4]  # atmospheric pressure
+    n  = V[5]
+    Rp = bulk_gas_constant(s, V, *args)
+    return Pa / (Rp * T) 
+
+
+def heat_capacity(s, V, *args):
+    """
+    Define specific heat capacity, Cp, of plume, as a function of the dry air 
+      mass fraction, n, for initial 95% of vapour 
+    Ca:  spec. heat capacity of air
+    Cp0: spec. heat capacity of vapour
+    """  
+    ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode = args
+    return Ca + (Cp0 - Ca) * (1 - V[5]) / (1 - n0)
+
+
+def bulk_gas_constant(s, V, *args):
+    """
+    Define bulk gas constant, Rp, of the plume, as a function of the dry air 
+    mass fraction in the plume, n.
+    Ra:  gas constant of dry air
+    Rp0: gas constant of vapour 
+    """
+    ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode = args
+    n = V[5]  # dry air mass fraction
+    return Ra + (Rp0 - Ra) * (n0 * (1 - n)) / (n * (1 - n0))  
+
+
+def temperature_fume(s, V, *args):
+    #specific gas constant water vapour: 461.5 J/(kgK)
+    """
+    Define fumarole plume properties
+    plume temperature: temperature_fume, as a function of the mass flux, 
+    enthalpy flux and specific heat capacity of vapour.
+    plume density: density_fume as a function of spec. gas constant of 
+        vapour, Rp, atmospheric pressure and plume temperature T
+    entrainment velocity as a function of plume velocity U = V[1] / V[0], 
+    plume angle theta: V[2], 
+    windspeed W
+    entrainment coefficients: ks and kw
+    """
+    ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode = args
+    Q, _, E, *_ = V
+    Cp = heat_capacity(s, V, *args)
+    return E / (Q * Cp)  
+
+
+def produce_Gm(s, sol, *args):
+    """Returns the model predictions in a format suitable for comparison with 
+    data"""
+    rho  = density_fume(sol.t, sol.y, *args)
+    T    = temperature_fume(sol.t, sol.y, *args) - Tt
+    Cp   = heat_capacity(sol.t, sol.y, *args)
+    b    = sol.y[0] / np.sqrt(rho * sol.y[1])
+    u    = sol.y[1] / sol.y[0]
+    theta = sol.y[3]
+    # insert solution into array of large values where soln is valid
+
+    L = len(s)
+    Lsol  = len(sol.t)
+    solp  = -9999 * np.ones((3, L))
+    solp[:, :Lsol] = np.array([theta[:Lsol],
+                               b[:Lsol],
+                               T[:Lsol]])
+
+    return solp.flatten()
+
+
+def objective_fn(model, data, errors, mode='leastsq', exponentiate=False):
+    """Calculate and return the objective (model misfit) function"""
+
+    Gm_d   = model - data
+    errors = np.array(errors)
+    if mode != 'abs' and mode != 'leastsq' and mode != 'lstsq':
+        mode = 'lstsq'  
+        warnings.warn('Unknown mode: should be either "abs" or "leastsq.  ' +
+                      'Defaulting to leastsq"')
+    
+    
+    # Laplacian distributed erros - absolute value of model - data
+    if mode == 'abs':
+        # errors should be in 1D array form in this case,
+        if len(errors.shape) == 2:
+            errors = np.diag(errors)
+        # apply the absolute value
+        S = (np.abs(Gm_d) * np.sqrt(errors)).sum()
+
+    # Gaussian distributed errors
+    if mode == 'leastsq' or mode == 'lstsq':
+        if len(errors.shape) != 2:
+            errors = np.diag(1/errors**2)
+        S = .5 * Gm_d @ errors @ Gm_d
+
+    if not exponentiate:
+        return S
+    return 1 - np.exp(-S)
+
+
+def parallel_job(U0, R0, T0, W1, s, d, Cd_inv, *args): 
+    from scipy.integrate import solve_ivp
+
+    # errors/Cd_inv are not passed explicitly as arguements
+    warnings.filterwarnings('ignore')
+    args = list(args)
+    args[-2] = W1
+    _, _, _, _, Cp0, _, _, _, Pa0, n0, wind, _, H1, mode = args
+    V0   = [1, 1, Cp0 * T0, 1, Pa0, n0, 0, 0]  # required for routines
+    rho0 = density_fume(0, V0, *args)
+    Q0   = rho0 * np.pi * R0**2 * U0
+    M0   = Q0 * U0
+    E0   = Q0 * Cp0 * T0
+    V0   = [Q0, M0, E0, np.pi/2, Pa0, n0, 0, 0]
+    
+    ## Extract mode from args if it has been included
+    sol  = solve_ivp(derivs, [s[0], s[-1]], V0, t_eval=s, args=args)
+    Gm   = produce_Gm(s, sol, *args)
+
+    return objective_fn(Gm, d, Cd_inv, mode=mode), V0, W1
+
+
+def solve_system(x0, s, data, errors, *args):
+    """Helper function for the minimisation problem using 
+    scipy.optimize.minimize
+    """
+    _, _, _, _, Cp0, _, _, _, Pa0, n0, wind, _, H1, mode = args
+    args = list(args)
+    x0p  = x0[:-1]
+    wind = x0[-1]
+    args[-2] = wind
+
+    R0, U0, T0, _ = x0
+    V0   = [1, 1, Cp0 * T0, 1, Pa0, n0, 0, 0]  # required for routines
+    rho0 = density_fume(0, V0, *args)
+    Q0   = rho0 * np.pi * R0**2 * U0
+    M0   = Q0 * U0
+    E0   = Q0 * Cp0 * T0
+    V0   = [Q0, M0, E0, np.pi/2, Pa0, n0, 0, 0]
+
+    sol  = solve_ivp(derivs, [s[0], s[-1]], V0, t_eval=s, args=args)
+    Gm   = produce_Gm(s, sol, *args)
+
+    ## Extract mode from args if it has been included
+    mode = 'lstsq'
+    if type(args[-1]) is str:
+        mode = args[-1]
+
+    return objective_fn(Gm, data, errors, mode=mode)
+    
+
+def do_plots(ndims, T0, R0, objFn, exponentiate=False):
+    ## Helper functions for plotting in plotly
+    def get_the_slice(x,y,z, surfacecolor):
+        return go.Surface(x=x,
+                          y=y,
+                          z=z,
+                          surfacecolor=surfacecolor,
+                          coloraxis='coloraxis')
+
+    def get_lims_colors(surfacecolor):# color limits for a slice
+        return np.min(surfacecolor), np.max(surfacecolor)
+
+
+    def colorax(vmin, vmax):
+        return dict(cmin=vmin,
+                    cmax=vmax)
+
+
+    fig0, ax0 = plt.subplots(figsize=(10*cm, 10*cm))
+    ax0.plot(solp.T, s, '-')
+    ax0.set_xlabel('Plume parameters')
+    ax0.set_ylabel(r'Distance along plume axis, $s$')
+    ax0.legend((r'$\theta$', r'$b$', r'$T$'))
+
+    plt.gca().set_prop_cycle(None)  # reset colour cycle
+    ax0.plot(sol_noise.T, s, '.')
+
+    fig0.tight_layout()
+    
+    S = objective_fn(Gm, d, Cd_inv, 'leastsq', False)
         
-        Default parameters are as defined in GCs email to me
-
-    Returns
-    -------
-    dVds	an array containing the derivatives
-
-    Changes log
-    -----------
-    2018-06-25  swapped np.sqrt(m) term for q in df/ds (see Aubry et al.)
-	
-    """
-    Q, M, F, theta = V
-    b, u, gp = Q / np.sqrt(M), M / Q, F / Q
-    alpha, beta, N, m, w = p
-
-    # Get the wind speed at the current altitude
-    if w is None:
-        w = wind(s, V)
-
-    # calculate the entrainment velocity
-    u_e = ((alpha * abs(u - w * np.cos(theta))**m)
-		   + (beta * abs(w * np.sin(theta)))**m) ** (1./m)
-
-    # Define the derivatives
-    dQds     =  2. * b * u_e
-    dMds     =  F * Q / M * np.sin(theta) + w * np.cos(theta) * dQds
-    dFds     = -N**2 * Q * np.sin(theta) 
-    dthetads =  F * Q / M**2 * np.cos(theta) - w / M * np.sin(theta) * dQds
-
-    dVds    = np.zeros(4)
-    dVds[0] = dQds
-    dVds[1] = dMds
-    dVds[2] = dFds
-    dVds[3] = dthetads
-
-    return dVds
-
-
-def integrator(p, s0, V0, derivs=derivs):
-    """ 
-    Return the solution (s, V) of derivs.  Wrapper for the numerical 
-    integration of the model defined by derivs, using the 
-    scipy.integrate.ode module.
-    """
-    # Initialise an integrator object
-    r = ode(derivs).set_integrator('lsoda', nsteps=1e6)
-    r.set_initial_value(V0, 0.)
-    r.set_f_params(p)
+    fig, ax = plt.subplots(figsize=(10*cm, 10*cm))
+    if ndims == 2:
+        Ropt_ind, Topt_ind = np.where(objFn == objFn.min())
+        im = ax.pcolor(T0, R0, np.exp(-objFn), norm=LogNorm(),
+                       label='misfit function')
+    if ndims == 3:
+        Uopt_ind, Ropt_ind, Topt_ind = np.where(objFn == objFn.min())
+        im = ax.pcolor(T0, R0, np.exp(-objFn[Uopt_ind]), norm=LogNorm(),
+                       label='misfit function')
+    p = ax.plot(T0true, R0true, 'wo', label='true conditions')
+    # q = ax.plot(T0[Topt_ind], R0[Ropt_ind], 'y*', mec='k', mew=.25,
+    #             label='opt. conditions')
     
-    # Define state vector and axial distance
-    V = []    # State vector
-    s = []    # Axial distance
-    V.append(V0)
-    s.append(s0)
-    
-    # Define the individual variables - these will be calculated at run time
-    Q, M, F, theta = V0  # 0., 0., 0., 0.
-    Q = np.float64(Q)
-    M = np.float64(M)
-    F = np.float64(F)
-    theta = np.float64(theta)
-    
-    ####################################
+    ax.set_xlabel(r'Vent radius, $R_0/$[m]')
+    ax.set_ylabel(r'Vent temperature, $T_0$/[K]')
 
-    # Integrate, whilst successful, until the domain size is reached
-    ind = 0
-    while r.successful() and r.t < t1 and M >= 0.:
-        dt = dsexp[ind]
-        r.integrate(r.t + dt)
-        V.append(r.y)
-        s.append(r.t)
-        Q, M, F, theta = r.y
-        ind += 1
-    s = np.array(s)
-    V = np.float64(np.array(V))
-    return s, V
+    ax.legend()
 
-
-def integrator2(V0, p, x=None):
-    if x is None:
-        x   = np.linspace(0, 25, 21)
-    sol = solve_ivp(derivs, [x[0], x[-1]], V0, args=(p,), t_eval=x)
-    return sol.t, sol.y.T
-
-
-def wind(s, V):
-    """ 
-    Functions that define the wind at altitude, z.
-    
-    Currently a constant value is returned
-    """
-
-    theta = V[3]
-
-    return .01
-
-
-def objective_fn(Vexp, Vsyn, cov=None, p=(.09, .6, .1, 1., None),
-                mode='lsq'):
-    """
-    Returns the objective (misfit/cost) function as the either (weighted) 
-    sum of square differences between the synthetic and "experimental" data, 
-    or the (weighted) absolute difference.
-    
-    Parameters
-    ----------
-    Vsyn : list or array_like
-        state vector of sythetic (model) data
-    Vexp : list or array_like	
-        state vector of experimental (or natural) data
-    cov : array_like (optional)
-        covariance matrix of the experimental data for weighting.  
-    p : tuple or array_like
-        vector of state variables
-    mode : str (optional)
-        switch for choosing the form of the objective function.  Choices 
-        are 'least-squares' (lsq) or 'absolute differences' (abs).  Default 
-        is 'lsq'.
-
-    TO DO
-    -----
-    Check for dimensional coherence - "enforce" statement at beginning 
-    of code?
-    
-    """
-    # If no stdr /  dev is provided for the experimental data,
-    # set unit weights.
-    if cov is None:
-        sigma = np.ones_like(Vexp)
-        cov   = np.eye(len(Vexp))
-    else:
-        sigma = np.sqrt(np.diag(cov))
-
-    Vsyn = Vsyn.ravel()
-    Vexp = Vexp.ravel()
-    
-    # Do some checking on the size of inputs
-    if any(len(row) != len(cov) for row in cov):
-        raise TypeError('Covariance matrix must be square. ')
-    if (len(Vexp) != len(Vsyn)):
-        raise TypeError('Model and data vectors must be of equal length')
-
-
-    # Check that the synthetic and experimental data are of the same dimension
-    # then define a residual (difference).
-    if len(Vsyn) == len(Vexp):
-        r = Vsyn - Vexp
-    else:
-        raise Warning('input vectors must be of the same dimension')
-	
-    if mode == 'lsq':
-        # Note that the "@" syntax is not recognised for python < 3.5
-        # In this case use r.T.dot(invSig).dot(r)
-        objFn = .5 * r.T @ np.linalg.inv(cov) @ r  # Quadratic form
-    elif mode == 'abs':
-        objFn = (np.abs(r) / sigma).sum()
-    else:
-        raise Warning('Covariance matrix of unknown dimensions')
-	#print(objFn)
-
-    return np.exp(-objFn)
-
-
-def objective_fn2(V0, derivs, p, sexp, dexp, sig_dexp=None, mode='lsq'):
-    """
-    Return the objective (misfit/cost) function as the either sum of 
-    square differences between the synthetic and "experimental" data, 
-    or the absolute difference.  If the vector of standard errors on 
-    the data, 'sig_dexp', is supplied, the objective function will be
-    built from weights derived from these.
-    
-    Parameters
-    ----------
-    V0 : list or array_like
-        Current "guess" of the source conditions.
-    derivs : callable
-        function that describes the model.
-    p : tuple or array_like
-        model parameters.
-    sexp : list or array_like
-        independent variable (sexp) of experimental (or natural) data.
-    dexp : list or array_like
-        state vector of experimental (or natural) data consisting of width 
-        (bexp) and angle (thetaexp).
-    sig_dexp : list or array_like (optional)
-        covariance matrix of the experimental data for weighting.  
-    mode : str (optional)
-        switch for choosing the form of the objective function.  Choices 
-        are 'least-squares' (lsq) or 'absolute differences' (abs).  Default 
-        is 'lsq'.
-
-    Notes
-    -----
-    1)  The covariance matrix of data is assumed to be diagonal though there 
-    will be a strong correlation between several variables, for example width 
-    and plume angle.  Non (main) diagonal covariances can be dealt with by 
-    rewritting the code to allow for the covariance matrix to be explicitly 
-    passed to the function.
-    2)  The synthetic data is flattened ('ravelled') according to 'C' 
-    (row-major) format.  Thus care should be taken to flatten the natural data 
-    using the same format.
-
-    TO DO
-    -----
-    - Check for dimensional coherence
-    - Explicitly pass the covariance matrix
-
-    """
-    # Initialise integrator object, set intial conditions and model params.
-    r = ode(derivs).set_integrator('lsoda', nsteps=1e6)
-    r.set_initial_value(V0, 0).set_f_params(p)
-
-    # Domain of integration and integration step. 
-    # No need to go further than extent of the experimental plume
-    t1 = sexp.max()             
-    dt = .1
-    dsexp = np.diff(sexp)
-    s, Q, M, F, theta = [], [], [], [], []
-    s.append(0.)
-    Q.append(V0[0])
-    M.append(V0[1])
-    F.append(V0[2])
-    theta.append(V0[3])
-
-    # Solve the model for the current initial conditions
-    ind = 0
-    while r.successful() and r.t < t1:
-        dt = dsexp[ind]         # to get model output at expt. points
-        r.integrate(r.t + dt)
-        s.append(r.t)
-        Q_, M_, F_, theta_ = r.y
-        Q.append(Q_)
-        M.append(M_)
-        F.append(F_)
-        theta.append(theta_)
-        ind += 1
-    Q, M, F, theta = np.array(Q), np.array(M), np.array(F), np.array(theta)
-
-    # Convert plume flux parameters into basic params
-    b, u, gp = Q / np.sqrt(M), M / Q, F / Q
-
-    d   = np.array([theta]).ravel(order='C')
-    res = dexp - d
-
-    # Kernel definition depends on mode
-    if mode == 'lsq':
-        if sig_dexp is None:
-            kernel = .5 * res.dot(res)
-        else:
-            # Build and invert covariance matrix
-            invCd = np.linalg.inv(np.diag(sig_dexp**2))  # Cov. is std**2
-            kernel = .5 * res @ invCd @ res  # Requires python >= 3.5
-    else:
-        if sig_dexp is None:
-            kernel = np.abs(res).sum()
-        else:
-            kernel = np.abs(res / sig_dexp).sum()
-
-    return kernel
-
-
-def objective_fn3(V0, derivs, p, sexp, dexp, sig_dexp=None, mode='lsq'):
-    """
-    Return the objective (misfit/cost) function as the either sum of 
-    square differences between the synthetic and "experimental" data, 
-    or the absolute difference.  If the vector of standard errors on 
-    the data, 'sig_dexp', is supplied, the objective function will be
-    built from weights derived from these.
-    
-    Parameters
-    ----------
-    V0 : list or array_like
-        Current "guess" of the source conditions.
-    derivs : callable
-        function that describes the model.
-    p : tuple or array_like
-        model parameters.
-    sexp : list or array_like
-        independent variable (sexp) of experimental (or natural) data.
-    dexp : array_like
-        state vector of experimental (or natural) data consisting of width 
-        (bexp) and reduced gravity (gpexp).  Should be an array of size 
-        nobs-by-2 where nobs is the number of observations.
-    sig_dexp : list or array_like (optional)
-        covariance matrix of the experimental data for weighting.  
-    mode : str (optional)
-        switch for choosing the form of the objective function.  Choices 
-        are 'least-squares' (lsq) or 'absolute differences' (abs).  Default 
-        is 'lsq'.
-
-    Notes
-    -----
-    1)  The covariance matrix of data is assumed to be diagonal though there 
-    will be a strong correlation between several variables, for example width 
-    and plume angle.  Non (main) diagonal covariances can be dealt with by 
-    rewritting the code to allow for the covariance matrix to be explicitly 
-    passed to the function.
-    2)  The synthetic data is flattened ('ravelled') according to 'C' 
-    (row-major) format.  Thus care should be taken to flatten the natural data 
-    using the same format.
-
-    TO DO
-    -----
-    - Check for dimensional coherence
-    - Explicitly pass the covariance matrix
-
-    """
-    sol = solve_ivp(derivs, [sexp[0], sexp[-1]], V0, args=(p,), t_eval=sexp)
-    s, (Q, M, F, theta) = sol.t, sol.y
-
-    # Convert plume flux parameters into basic params
-    b, u, gp = Q / np.sqrt(M), M / Q, F / Q
-
-    d   = np.array([b, gp]).T
-    if len(dexp) >= len(d):
-        res = (dexp[:len(d)] - d).ravel()
-    else:
-        res = (dexp - d[:len(dexp)]).ravel()
-
-    # Kernel definition depends on mode
-    if mode == 'lsq':
-        if sig_dexp is None:
-            kernel = .5 * res.dot(res)
-        else:
-            # Build and invert covariance matrix
-            invCd = np.linalg.inv(np.diag(sig_dexp**2))  # Cov. is std**2
-            kernel = .5 * res @ invCd @ res  # Requires python >= 3.5
-    else:
-        if sig_dexp is None:
-            kernel = np.abs(res).sum()
-        else:
-            kernel = np.abs(res / sig_dexp).sum()
-
-    return -np.exp(-kernel)
-
-
-def load_ics_parameters(pathname, run, alpha=.09, beta=.6, m=1.5):
-    """ 
-    Returns initial conditions and model parameters determined from CGTA's 
-    experimental data
-    """
-    filename = pathname + 'ExpPlumes_for_Dai/TableA1.xlsx'
-    # Load all the data (in CGS units)
-    df = pandas.read_excel(filename, sheet_name='CGSdata', skiprows=1, 
-                           names=('run','rhoa','rhoa_2sig','N','N_2sig', 
-                                  'rho0', 'rho0_2sig', 'U0', 'U0_2sig',
-                                  'W', 'W_2sig', 'gp', 'gp_2sig', 
-                                  'Q0', 'Q0_2sig', 'M0', 'M0_2sig',
-                                  'F0', 'F0_2sig', 'Ri0', 'Ri0_2sig', 
-                                  'Wstar', 'Wstar_2sig'))
-    params = pandas.read_excel(filename, sheet_name='CGSparameters')
-
-    # Define source conditions
-    expt  = df.loc[df['run'] == run]
-    rhoa0 = expt['rhoa'].values[0]
-    rho0  = expt['rho0'].values[0]
-    N     = expt['N'].values[0]
-    u0    = expt['U0'].values[0]
-    W     = expt['W'].values[0]
-    r0    = params[params['property'] == 'nozzleSize'].value.values[0]
-    
-    # Define function parameters to pass to derivs.  
-    # Tuple p contains alpha, beta, N, m, w
-    p = (alpha, beta, N, m, W)
-
-    gp0 = -(rhoa0 - rho0) / rhoa0 * g
-        
-    Q0 = r0**2 * u0 
-    M0 = r0**2 * u0**2 
-    F0 = gp0 * Q0
-    theta0 = np.pi / 2.
-
-    V0 = np.array([Q0, M0, F0, theta0])
-    return V0, p
-
-
-def load_expt_data(run):
-    # Load the experimental data and image
-    dataDirName = pathname + 'ExpPlumes_for_Dai/exp%02d/' % run
-    # load the experimental image
-    data = np.flipud(loadmat(dataDirName + 'gsplume.mat')['gsplume'])
-    # Load the locations of the centre of the plume (values in pixels)
-    xexp = loadmat(dataDirName + 'xcenter.mat')['xcenter'][0]
-    zexp = loadmat(dataDirName + 'zcenter.mat')['zcenter'][0]
-    
-    # Define the pixel coordinates of the origin as the first points in x & z
-    origin = (xexp[0], zexp[0])
-    # Now calculate the world extent of the data, using a conversion factor 
-    # There's probably some neater and more pythonic way of calculating the
-    # world extent list but at least it works as is.
-    extentInPix = [0, data.shape[1], 0, data.shape[0]]
-    extent = np.array([(extentInPix[:2] - origin[0])/scaleFactor,
-                       (origin[1] - extentInPix[2:])/scaleFactor])
-    extent = extent.flatten().tolist()
-
-    # Convert experimental trajectories to physical units
-    xexp = (xexp - xexp[0]) / scaleFactor
-    zexp = (zexp[0] - zexp) / scaleFactor
-    return data, xexp, zexp, extent
+    return ax0, ax
 
 
 if __name__ == '__main__':
-    # Look for command line arguments that tell us which experimental run
-    # to analyse.  If the command line argument is 'all', set allFlag to True
-    # and run the whole set.  If 
-    allFlag = False
-    run     = None
-    if len(sys.argv) >= 2:
-        run = sys.argv[1]
-        if run == 'all':
-            allFlag = True
-        else:
-            run = int(run)
-        if len(sys.argv) == 3:
-            plotResults = sys.argv[2]
-            if plotResults == 'True':
-                plotResults = True
-            if plotResults == 'False':
-                plotResults = False
-        else:
-            plotResults = True  # Default behaviour is to print the solution
-    else:
-        run = 3                 # Default expt
-        plotResults = True      # Default behaviour is to print the solution
-    # Test if plotResults is a boolean
-    if not isinstance(plotResults, bool):
-        raise TypeError('plotReults must be a boolean')
+    """
+    To run a calculation, do
+    python model_synthdata_inversion.py ncore npts inversion print wind
 
-    # Load experimental data and image from file
-    data, xexp, zexp, extent = loadExptData(run)
-    xexp = xexp[::10]
-    zexp = zexp[::10]
-    n, m = data.shape
+    parameters
+    ----------
+    ncore : int
+       Number of cores/processors to run on
+    ngrid : int
+       Number of grid points per parameter (all parameters have equal number 
+       of grid points)
+    ndims : int
+       Number of parameter dimensions for inversion
+    inversion : bool
+       Do invsion
+    plots : bool
+       Show plots after calculations have run
+    wind  : bool
+       Include wind in simulations
+    """
+    from pathlib import Path
     
-    # Distance along plume axis and plume angle
-    sexp     = dist_along_path(xexp, zexp)
-    thetaexp, sig_thetaexp = plume_angle(xexp, zexp, errors=[1/scaleFactor]*2)
+    import sys
+
+    home_str = str(Path.home())
+
+    """
+    Solve differential equations for a set of initial values Q0, M0, theta0, 
+    E0, Pa0, n0
+    """
     
-    xexpPix = (xexp - extent[0]) * scaleFactor
-    zexpPix = n + (extent[-1] - zexp) * scaleFactor
-    true_locn, bexp, sig_true_locn, sig_bexp = true_location_width(
-        np.array([xexpPix, zexpPix]).T,
-        data,
-        errors=[1/scaleFactor])
-
-    bexp /= scaleFactor
-    sig_bexp /= scaleFactor
-
-    # Form initial conditions and model parameters from CGTA expt data
-    V0, p = loadICsParameters(pathname, run, alpha=.075, beta=.5, m=2.)
-
+    ##  Job options
+    ncore =  12  # Number of processors/cores
+    ngrid = 101  # Number of grid points
     
-    # Define state vector and axial distance
-    V  = []
-    s  = []
-    V.append(V0)
-    s.append(0.)
+    if len(sys.argv) == 2:
+        ncore   = int(sys.argv[1])
+    if len(sys.argv) >= 3:
+        ncore   = int(sys.argv[1])
+        ngrid   = int(sys.argv[2])
+    inversion   = False
+    nelder_mead = False
+    plots       = False
+    wind        = False
+    # Parameter dimensions in which to find solution
+    # 2=(R0, T0), 3=(U0, R0, T0), 4=(W1, U0, R0, T0)
+    if len(sys.argv) >= 4:
+        ndims   = int(sys.argv[3])
+    if len(sys.argv) >= 5:
+        if sys.argv[4] == 'True':
+            inversion = True
+    if len(sys.argv) >= 6:
+        if sys.argv[5] == 'True':
+            plots = True
+    if len(sys.argv) == 7:
+        if sys.argv[6] == 'True':
+            wind = True
 
-    # Define the individual variables - these will be calculated at run time
-    Q, M, F, theta = [], [], [], []
-    Q0, M0, F0, theta0 = V0
-    Q.append(Q0)
-    M.append(M0)
-    F.append(F0)
-    theta.append(theta0)
+    ##  fixed parameters
+    nsol   =    51    # number of points at which "observations" will be made
+    Cp0    =  1885    # Heat capacity of plume contents
+    Pa0    = 86000    # Atmospheric pressure at vent altitude
+    theta0 = np.pi/2  # Initial plume angle
+    n0     =     0.05 # (Dry) gas content of plume
+    Ta0    = 18 + Tt  # Air temperature at vent altitude
+    s      = np.linspace(0, 15, nsol)  # Follow plume up to 15 m
 
-    r = ode(derivs).set_integrator('lsoda', nsteps=1e6)
-    r.set_initial_value(V0, 0)
-    r.set_f_params(p)           # Set non default values for p
+    ##  variables
+    rho0true = .5
+    R0true = .5
+    T0true = Tt + 96
+    U0true = 10
+    Q0true = rho0true * U0true * R0true**2 * np.pi
+    M0true = Q0true * U0true
+    E0true = Q0true * Cp0 * T0true
+    V0true = [Q0true, M0true, E0true, theta0, Pa0, n0, 0, 0]
+    # Wind profile - simple shear to z=H1, constant wind beyond
+    H1     = 5  # Height for end of shear profile
+    W1 = np.linspace(0, 10, ngrid)             # Wind speed at H1 (= 5 )m
+    args = (.09, .5, 9.81, 1006, 1885, 291, 287, 462, 86000, 0.05,
+                wind, W1[0], H1, 'lstsq')  # 'abs'
+    if ndims < 4:
+        W1   = 5
+        args = (.09, .5, 9.81, 1006, 1885, 291, 287, 462, 86000, 0.05,
+                wind, W1, H1, 'lstsq')  # 'abs'
+    
 
-    # Domain of integration and integration step. 
-    # No need to go further than extent of the experimental plume
-    t1 = sexp.max()             
-    dsexp = np.diff(sexp)
-	
-    ind = 0
-    while r.successful() and r.t < t1 and M[-1] >= 0.:
-        dt = dsexp[ind]         # to get model output at expt. points
-        r.integrate(r.t + dt)
-        V.append(r.y)
-        s.append(r.t)
-        Q_, M_, F_, theta_ = r.y
-        Q.append(Q_)
-        M.append(M_)
-        F.append(F_)
-        theta.append(theta_)
-        ind += 1
+    # ks, kw, g, Ca, Cp0, Ta0, Ra, Rp0, Pa0, n0, wind, W1, H1, mode
 
-    # Convert variables to numpy arrays for convenience
-    s, V, Q, M, F, theta = (np.array(s), np.array(V), np.array(Q), 
-                            np.array(M), np.array(F), np.array(theta))
+    R0 = np.linspace(0.1, 1, ngrid)             # Vent radius
+    T0 = np.linspace(50 + Tt, 150 + Tt, ngrid)  # Vent temperature
+    U0 = np.linspace(5, 15, ngrid)              # Vent speed
 
-    filename = pathname + 'fumarole_plume_model_expt%02d.csv' % run
-    try:
-        if not os.path.isfile(filename):
-            with open(filename, 'w') as fido:
-                fido.write('# Solution to run % 2d\n' % run)
-                for _s, line in zip(s, V):
-                    fido.write('%6.2f,%8.4f,%8.4f,%8.4f,%8.4f\n' % (_s,
-							            line[0],
-                                                                    line[1],
-							            line[2],
-                                                                    line[3]))
-    except FileNotFoundError:
-        print('Directory does not exist')
+    sol_true = solve_ivp(derivs, [s[0], s[-1]], V0true, t_eval=s, args=args)
 
-    # Convert plume flux parameters into basic params
-    b, u, gp = Q / np.sqrt(M), M / Q, F / Q
+    # Produce "true" data values
+    sol   = sol_true
+    rho   = density_fume(sol.t, sol.y, *args)
+    T     = temperature_fume(sol.t, sol.y, *args) #- Tt
+    Cp    = heat_capacity(sol.t, sol.y, *args)
+    b     = sol.y[0] / np.sqrt(rho * np.pi * sol.y[1])
+    u     = sol.y[1] / sol.y[0]
+    theta = sol.y[3]
 
-    # Calculate the model predictions
-    xmod, zmod = [0.], [0.]
-    xup, zup   = [0.], [0.]
-    xlo, zlo   = [0.], [0.]
-    ds_ = np.diff(s)
-    for (ds, b_, th) in zip(ds_, b, theta):
-        xmod.append(xmod[-1] + ds * np.cos(th))
-        zmod.append(zmod[-1] + ds * np.sin(th))
-        # Add plume width to obtain outer envelope
-        xup.append(xup[-1] + ds * np.cos(th) + b_ * np.sin(th))
-        zup.append(zup[-1] + ds * np.sin(th) + b_ * np.cos(th))
-        xlo.append(xlo[-1] + ds * np.cos(th) - b_ * np.sin(th))
-        zlo.append(zlo[-1] + ds * np.sin(th) - b_ * np.cos(th))
+    noise_level = 1
+    sigtheta, sigb, sigT = (np.pi / 10 * noise_level,   # rad
+                            .05 * noise_level,          # m
+                            1 * noise_level)            # K
+    Cd_inv = np.diag(np.array([1 / sigtheta**2 * np.ones_like(theta),
+                               1 / sigb**2 * np.ones_like(b),
+                               1 / sigT**2 * np.ones_like(T)]).ravel())
 
-    if plotResults:
-        # Plot the image, experimental and model data
-        plt.close('all')
-        fig, ax = plt.subplots(1, 2, figsize=(10, 5))
-        # Plume greyscale intensity image 
-        ax[0].imshow(data, extent=extent, cmap=plt.cm.gray)
-        ax[0].set_xlabel(r'$x$/[cm]')
-        ax[0].set_ylabel(r'$z$/[cm]')
-        XLim = ax[0].get_xlim()
-        YLim = ax[0].get_ylim()
-        # Experimentally-determined plume axis trajectory
-        ax[0].plot(xexp, zexp, 'r--', label='expt', lw=2)
+    solp  = np.array([theta, b, T])
+    noise = np.random.randn(*solp.shape)  # Gaussian noise, _N_(0,1)
+    sol_noise = (solp.T + noise.T * (sigtheta, sigb, sigT)).T
+    d    = sol_noise.flatten()  # array of data
+    Gm   = produce_Gm(s, sol, *args)
+    Gm_d = Gm - d
+    
+    if inversion:
+        """
+        Run jobs in parallel in order to calculate objective function at
+        each combination of possible source values.
+        """
+        # "wrapper" partial function to simplify notation below
+        pj = partial(parallel_job, s=s, d=d, Cd_inv=Cd_inv, args=args)
+        t  = time.perf_counter()
 
-        # Model plume axis trajectory
-        ax[0].plot(xmod, zmod, 'g-', label='model', lw=2)
-        ax[0].axes.invert_yaxis() # set_ylim(YLim[::-1])
-        ax[0].legend(loc=4, framealpha=.6)
-        ax[0].grid(True)
+        if ndims == 2:
+            u0 = U0true
+            w1 = W1
+            sequence = [R0, T0]
+            results  = Parallel(n_jobs=ncore)(delayed(parallel_job)(
+                 u0, r0, t0, w1, s, d, Cd_inv, *args) for (
+                     r0, t0) in list(product(*sequence)))
 
-        # Create interpolation structures based on the model solution which
-        # will be used to recast the model at the experimental data points.
-        # PLUME WIDTH
-        ax[1].plot(b - bexp, s,
-                   label=r'$b_\mathrm{model} - b_\mathrm{exp}$')
-        # PLUME ANGLE
-        ax[1].plot(theta - thetaexp, # / sig_thetaexp,
-                   s, '-', #c='C3',
-                   label=r'$\theta_\mathrm{model} - \theta_\mathrm{exp}$')
-        ax[1].set_title('Differences between model and expt data')
-        ax[1].legend(loc='best',
-                     framealpha=.6)
-        ax[1].grid(True)
-        ax[1].set_ylabel(r'$s$/[cm]')
+            tstop = time.perf_counter()
 
-        dVds = []
-        for s_, V_ in zip(s, V):                                               
-            dVds.append(derivs(s_, V_)) 
-        dVds = np.array(dVds)
+            ## Deal out the results
+            objFn, initialConds, winds = [], [], []
 
-        plt.show()
+            for result in results:
+                objFn.append(result[0])
+                initialConds.append(result[1])
+                winds.append(result[2])
+
+            initialConds = np.array(initialConds)
+            objFn = np.array(objFn).reshape((-1, ngrid))
+
+        if ndims == 3:
+            sequence = [U0, R0, T0]
+            w1       = W1
+            results  = Parallel(n_jobs=ncore)(delayed(parallel_job)(
+                 u0, r0, t0, w1, s, d, Cd_inv, *args) for (
+                     u0, r0, t0) in list(product(*sequence)))
+
+            tstop    = time.perf_counter()
+
+            ## Deal out the results
+            objFn, initialConds, winds = [], [], []
+
+            for result in results:
+                objFn.append(result[0])
+                initialConds.append(result[1])
+                winds.append(result[2])
+
+            initialConds = np.array(initialConds)
+            objFn = np.array(objFn).reshape((-1, ngrid, ngrid))
+
+        if ndims == 4:
+            u0 = U0true
+
+            sequence = [W1, U0, R0, T0]
+            results  = Parallel(n_jobs=ncore)(delayed(parallel_job)(
+                 u0, r0, t0, w1, s, d, Cd_inv, *args) for (
+                     w1, u0, r0, t0) in list(product(*sequence)))
+
+            tstop = time.perf_counter()
+
+            ## Deal out the results
+            objFn, initialConds, winds = [], [], []
+
+            for result in results:
+                objFn.append(result[0])
+                initialConds.append(result[1])
+                winds.append(result[2])
+
+            initialConds = np.array(initialConds)
+            objFn = np.array(objFn).reshape((ngrid, ngrid, ngrid, ngrid))
+
+
+        print("%dD job ran in %.3f s using %2d processors" % (
+            ndims, tstop - t, ncore))
+
+
+        ## Save variables for later
+        save_str = home_str + f'/Modelling/fumarolePlumeModel/' + \
+            f'objFn_soln_{ndims}D_{ngrid:04d}pts_{ncore:03d}cores'
+        if wind:
+            save_str += '_wind'
+        np.savez(save_str, W1=W1, R0=R0, T0=T0, U0=U0, objFn=objFn, solp=solp)
+        ## To retrieve variables, use np.load which will parse them as a
+        ## dict-like object, i.e.
+        ## container = np.load(filename)
+        ## R0, T0, U0, objFn = container.values()
+
+    if nelder_mead:
+        x0  = V0true  # [1, 1, 1, np.pi/2 , 86000, 0.05]
+        t   = time.perf_counter()
+        res = minimize(solve_system, x0=V0true, args=(s, d, Cd_inv),
+                       method='Nelder-Mead',
+                       bounds=((0, None), (0, None), (0, None),
+                               (0, None)))
+        print("Solution found using Nelder-Mead in %.3f s" % (
+            time.perf_counter() - t))
+
+    if plots:
+        dp = partial(do_plots, T0=T0, R0=R0, objFn=objFn)
+        dp(ndims)

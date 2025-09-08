@@ -11,6 +11,10 @@ Provides functions:
     Locate the "centre of mass" and spread of a plume.
 - plume_trajectory
 - gaussian_profile
+- calc_scale_factor
+- image_extent
+- pixel_to_world
+- world_to_pixel
 - show_scaled_image    
 - open_plot_expt_image
     [No documentation currently available]
@@ -23,18 +27,23 @@ Provides functions:
     rotates an image by a given angle.
 - true_location_width    
 - path_from_smoothed_theta
-- pixel_to_world
-- world_to_pixel
+- wacky_value
+- extract_temperatures
+- read_params_file
+- save_params_file
+- _line
+- plume_analysis
 """
 from scipy.io.matlab import loadmat
 from scipy.interpolate import interp1d, splrep, splev
 from scipy.optimize import curve_fit
-
+from matplotlib.ticker import MultipleLocator
 
 import numpy as np
 import matplotlib.pyplot as plt
 import json 
 import os
+import shutil
 
 
 # scale_factor = 38.               # Conversion factor/[pix/cm]
@@ -200,10 +209,10 @@ def image_extent(params):  #image_shape, scale_factor=1., vent_loc=None):
     extent = np.array([(extent_in_pix[:2] - Ox) / scale_factor,
                        (Oz - extent_in_pix[2:]) / scale_factor]).flatten()
 
-    return extent     #[::-1]
+    return extent
 
 
-def pixel_to_world(p, params): #p, scale_factor, vent_loc, image_shape):
+def pixel_to_world(p, params):
     """
     Returns "real-world" positions (in units of metres), with the vent at
     (0, 0).
@@ -277,14 +286,13 @@ def world_to_pixel(world_p, params):
     return vent_loc + world_p * [1, -1] * scale_factor
 
     
-def show_scaled_image(image, scale_factor=1., vent_loc=None,
-                      ax=None, cmap=plt.cm.gray):
+def show_scaled_image(image, params, ax=None, cmap=plt.cm.gray):
     """
     Plots an image, overlaying real-world extents as the axes (as seen in the
     image plane), returning the extents and axes information.
     """
 
-    extent = image_extent(image.shape, scale_factor, vent_loc)
+    extent = image_extent(params)
     
     if ax is None:
         fig, ax = plt.subplots()
@@ -527,9 +535,9 @@ def true_location_width(data, mask=None, p=None, scale_factor=1,
     # "section" at each location from a Gaussian fit.
     theta, sig_theta = plume_angle(*p.T, errors=[1 / scale_factor]*2)
 
-    print(f"$\\theta$ = {theta}")
+    # print(f"$\\theta$ = {theta}")
 
-    # Lists for the var iance of b and d (from covariance matrix)
+    # Lists for the variance of b and d (from covariance matrix)
     var_b, var_d, d, rows = [], [], [], []
 
     for p_, th in zip(p, theta):
@@ -631,9 +639,16 @@ def path_from_smoothed_theta(s, theta, snew, smoothing=0.):
     return np.array(xnew), np.array(znew), thetaNew
 
 
-def extract_temperatures(image, params_file, rows=None, mode='max'):
-    params = read_params_file(params_file)
+def wacky_value(val, sig_val, cutoff=.5):
+    """filter values with rel. errors larger than cutoff value (default 50%)"""
+    val, sig_val = np.abs(val), np.abs(sig_val)
+    if np.all(sig_val / val > cutoff):
+        return True
+    return False
 
+
+def extract_temperatures(params, rows=None, mode='max'):
+    Texp, sig_Texp = [], []
     if rows is None:
         p     = np.array(params['trajectory'])
         sexp  = dist_along_path(*p.T)
@@ -642,13 +657,29 @@ def extract_temperatures(image, params_file, rows=None, mode='max'):
     else:
         for row in rows:
             offs = row.mean()
-            ampl = row.max()
+            ampl = row.max()  
             locn = np.argmax(row)
             wide = 50
-            popt, pcov = curve_fit(gaussian_profile, )
-            offset + amplitude * np.exp(-.5 * ((x - loc) / width)**2)
-
-    return
+            p0   = (offs, ampl, locn, wide)
+            x    = np.arange(len(row))
+            try:
+                popt, pcov = curve_fit(gaussian_profile, x, row, p0=p0)
+                T, sig_T = popt[1], np.sqrt(pcov[1, 1])
+                if wacky_value(T, sig_T):
+                    Texp.append(np.nan)
+                    sig_Texp.append(np.nan)
+                else:
+                    if mode != 'mean':
+                        # max temperature is amplitude of gaussian curve
+                        Texp.append(T)
+                    else:
+                        # mean taken to be value at 1/e width
+                        Texp.append(0)
+                    sig_Texp.append(sig_T)
+            except:
+                Texp.append(np.nan)
+                sig_Texp.append(np.nan)
+    return np.array(Texp), np.array(sig_Texp)
 
 
 def read_params_file(params_file):
@@ -664,13 +695,17 @@ def save_params_file(params, params_file):
     from datetime import datetime as dt
     import json
     from os.path import getctime, isfile
-    from os import rename
+    from shutil import copyfile
 
     dfmt = '%Y%m%d'
     timenow_str = dt.now().strftime(dfmt)
     timecrn_str = dt.fromtimestamp(getctime(params_file)).strftime(dfmt)
-    if isfile(params_file) and not isfile(params_file + '.' + timecrn_str):
-        rename(params_file, params_file + '.' + timecrn_str)
+    todays_json = params_file + '.' + timecrn_str
+
+    print(params_file, todays_json)
+
+    if isfile(params_file) and not isfile(todays_json):
+        copyfile(params_file, todays_json)
     with open(params_file, 'w') as f:
         params = json.dump(params, f)
 
@@ -678,8 +713,11 @@ def save_params_file(params, params_file):
 
 
 def _line(x, y, th, width=.5):
+    # print(th / np.pi)
+    if abs(th/np.pi) < .25:
+        width /= 10
     x_ = np.array([-width, width])
-    y_ = (x_) / np.tan(-th)
+    y_ = (x_) / np.tan(th)
     return x_ + x, y_ + y
 
 
@@ -687,8 +725,9 @@ def plume_analysis(date, site, thermography=thermography):
     """
     Utility for extracting data from thermal images
     """
+    from datetime import datetime as dt
     import tifffile
-    
+        
     path = '/'.join([thermography, date + '_' + site])
     im_path = path + '/' + date.replace('-', '') + '_' + site + '_imAve_bt.tif'
     data = tifffile.imread(im_path)
@@ -704,41 +743,42 @@ def plume_analysis(date, site, thermography=thermography):
     vent_loc     = params['vent_loc']
     image_shape  = params['image_shape']
     
-    vent_loc[1]  = image_shape[0] - vent_loc[1]
     extent       = image_extent(params)
     
     #trajectory   = np.array(trajectory)
     #trajectory[:,1] = image_shape[0] - trajectory[:,1]
     
     real_trajectory = pixel_to_world(trajectory, params)
-    p = real_trajectory.copy()
+    p = trajectory.copy()
     
     #####################
     # EXTRACT VARIABLES #
     #####################
     # thexp, sig_thexp = plume_angle(p[:,0], p[:,1], errors=[1/scale_factor]*2)
     # thexp[0] = np.pi/2
+
     true_loc, bexp, sig_p, \
         sig_bexp, rows = true_location_width(data,
                                              p=p,
                                              errors=[1/scale_factor],
                                              retrows=True)
-    # Texp      = 
-    sexp      = dist_along_path(*p.T)  #[:,0], p[:,1])
-        
+    sexp = dist_along_path(*p.T)  #[:,0], p[:,1])
+    Texp, sig_Texp = extract_temperatures(params, np.array(rows))
+
     ############
     # Plotting #
     ############
     fig, axes = plt.subplots(ncols=2, sharey=False)
-    extent, im, ax = show_scaled_image(data, scale_factor, vent_loc, ax=axes[0])
+    extent, im, ax = show_scaled_image(data, params, ax=axes[0])
     # ax.plot(0, 0, 'or')  # vent location
     
     ## DEFINE THE DISTANCE ALONG THE AXIS, THE ANGLE AND THE WIDTH OF THE PLUME
-    pPixels = p.copy() * scale_factor + vent_loc
-    pPixels *= [1, -1]
-    pPixels += [0, 2*n]
-    
-    ax.plot(p[:,0], p[:,1], '--.r', lw=.8)
+    # pPixels = p.copy() * scale_factor + vent_loc
+    # pPixels *= [1, -1]
+    # pPixels += [0, 2*n]
+
+    # print(real_trajectory)
+    ax.plot(*real_trajectory.T, '-.r', lw=.8)
     ax.set_xlabel('Horizontal distance/[m]')
     ax.set_ylabel('Vertical distance/[m]')
     ax.set_title('Time-averaged TIR image')
@@ -746,20 +786,34 @@ def plume_analysis(date, site, thermography=thermography):
     ax.yaxis.set_minor_locator(MultipleLocator(1))
     
     thexp, sig_thexp = plume_angle(p[:,0], p[:,1], errors=[1/scale_factor]*2)
-    _, bexp, sig_p, sig_bexp = true_location_width(data, p=pPixels, errors=[1/scale_factor])
-    sexp      = dist_along_path(p[:,0], p[:,1])
+    _, bexp, sig_p, sig_bexp = true_location_width(data, p=p,
+                                                   errors=[1/scale_factor])
+    sexp      = dist_along_path(*real_trajectory.T)
     bexp     /= scale_factor
     sig_bexp /= scale_factor
+    Texp     += 273.15
 
-    for th, p_ in zip(thexp, p):
+    mab           = sig_bexp / bexp > .5
+    bexp[mab]     = np.nan
+    sig_bexp[mab] = np.nan
+
+    for th, p_ in zip(thexp, real_trajectory):
         xs, ys = p_
         x_, y_ = _line(xs, ys, th, width=.8)
         ax.plot(x_, y_, '--r', lw=.5)
     
-    axes[1].errorbar(bexp, sexp, ls='none', marker='.', c='k', xerr=sig_bexp)
-    axes[1].set_xlabel('Plume width/[m]')
+    axes[1].errorbar(10 * bexp, sexp, ls='none', xerr=10 * sig_bexp,
+                     marker='.', c='k', label=r'10 $\times$ Plume width/[m]')
+    axes[1].errorbar(0.1*(Texp-273.15), sexp, ls='none', xerr=0.1*sig_Texp,
+                     marker='.', c='C0', label=r'0.1 $\times$ Plume temp./[°C]')
+    axes[1].errorbar(np.abs(thexp) * 5, sexp, ls='none', xerr=sig_thexp,
+                     marker='.', c='C1',
+                     label=r'5 $\times |$Plume angle$|$/[rad]')
+    
+    # axes[1].set_xlabel('Plume width/[m]')
     axes[1].set_ylabel('Distance along plume axis/[m]')
     axes[1].set_title('Plume parameters')
+    axes[1].legend()
     
     fig.suptitle(f'{date}, {site}');
     fig.savefig(path + f'/{date}_{site}_analysis.png');
@@ -768,14 +822,18 @@ def plume_analysis(date, site, thermography=thermography):
     # UPDATE JSON #
     ###############
     params['real_trajectory'] = real_trajectory.tolist()
-    params['sexp'] = sexp.tolist()
-    params['bexp'] = bexp.tolist()
-    params['sig_bexp'] = sig_bexp.tolist()
-    
+    params['sexp']      = sexp.tolist()
+    params['bexp']      = bexp.tolist()
+    params['Texp']      = Texp.tolist()
+    params['thexp']     = thexp.tolist()
+    params['sig_bexp']  = sig_bexp.tolist()
+    params['sig_Texp']  = sig_Texp.tolist()
+    params['sig_thexp'] = sig_thexp.tolist()
+
+    todays_json = params_file + '.' + dt.now().strftime('%Y%m%d')
     if os.path.isfile(params_file):
-        if not os.path.isfile(params_file + '.' + dt.now().strftime('%Y%m%d')):
-            os.rename(params_file, params_file + '.' +
-                      dt.now().strftime('%Y%m%d'))
+        if not os.path.isfile(todays_json):
+            shutil.copyfile(params_file, todays_json)
     save_params_file(params, params_file)
 
     return

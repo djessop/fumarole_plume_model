@@ -2,7 +2,7 @@ Date,Site,imAve,Trajectories,Scaled,Dist,Usable
 2017-10-31,NAPE,False,False,False,,False
 2017-10-31,NAPN,True,False,False,4.59,False
 2017-10-31,CSN,True,True,True,4.07,True
-2018-03-05,CSC,True,False,False,4.93,False
+2018-03-05,CSC,True,True,True,4.93,True
 2018-03-05,CSN,True,True,True,8.44,True
 2018-03-05,CSS,True,True,True,4.92,True
 2018-03-05,G56,False,False,False,6.82,False
@@ -32,8 +32,8 @@ Date,Site,imAve,Trajectories,Scaled,Dist,Usable
 2020-01-30,CSS,True,True,True,9.35,True
 2020-01-30,NAPN,False,False,False,6.54,False
 2020-04-20,CSC,True,False,False,4.07,False
-2020-04-20,CSN,False,False,False,,False
-2020-04-20,CSS,False,False,False,9.37,False
+2020-04-20,CSN,True,False,False,,False
+2020-04-20,CSS,True,False,False,9.37,False
 2020-05-19,CS*,False,False,False,,False
 2020-05-19,CSS,True,True,True,10.41,True
 2020-06-23,CS*,False,False,False,,False
