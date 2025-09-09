@@ -729,7 +729,8 @@ def plume_analysis(date, site, thermography=thermography):
     import tifffile
         
     path = '/'.join([thermography, date + '_' + site])
-    im_path = path + '/' + date.replace('-', '') + '_' + site + '_imAve_bt.tif'
+    im_path = path + '/' + date.replace('-', '') + '_' \
+        + site + '_imAve_bt.tif'
     data = tifffile.imread(im_path)
     # data = np.flipud(data)
     params_file = path + '/parameters.json'

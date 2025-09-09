@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-@filename: model_synthdata_inversion.py
+@filename: numerical_plume_model.py
 @authors: avklein, dejessop
 @created: Fri Nov 24 09:56:16 2023
 """
@@ -318,7 +318,7 @@ def do_plots(ndims, T0, R0, objFn, exponentiate=False):
 if __name__ == '__main__':
     """
     To run a calculation, do
-    python model_synthdata_inversion.py ncore npts inversion print wind
+    python numerical_plume_model.py ncore npts inversion print wind
 
     parameters
     ----------
