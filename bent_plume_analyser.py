@@ -6,7 +6,6 @@ bent_plume_analyser.py
 A set of utilities to analyse wind-affected (bent) plumes
 
 Provides functions:
--------------------
 - centroid_posn
     Locate the "centre of mass" and spread of a plume.
 - plume_trajectory

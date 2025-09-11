@@ -3,10 +3,14 @@
 @filename: numerical_plume_model.py
 @authors: avklein, dejessop
 @created: Fri Nov 24 09:56:16 2023
+
+Provides functions:
+
+
 """
 
 from itertools import product
-from myiapws import iapws1992, iapws1995
+#from myiapws import iapws1992, iapws1995
 from matplotlib import pyplot as plt
 from matplotlib.colors import LogNorm
 #from mpl_toolkits import mplot3d
@@ -22,7 +26,7 @@ import warnings
 #import plotly.graph_objects as go
 
 
-Tt = iapws1995.Tt  # Triple point of water
+Tt = 273.16 # iapws1995.Tt  # Triple point of water/[K]
 cm = 1/2.54
 
 

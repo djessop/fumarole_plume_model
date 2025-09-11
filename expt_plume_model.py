@@ -2,7 +2,7 @@
 # coding=utf-8
 
 """ 
-fumarole_plume_model.py
+expt_plume_model.py
 
 Provides solutions to the model of Aubry et al (2017a)* which models the 
 variation of volume flux, q, momentum flux, m, buoyancy flux, f, and plume 
@@ -13,10 +13,16 @@ Provided functions:
 -------------------
 - derivs
     Description of the forward model.
+- integrator
+- integrator2
 - wind
     Wind at altitude, z.
 - objective_fn
     Misfit function between the synthetic and "experimental" data.
+- objective_fn2
+- objective_fn3
+- load_ics_parameters
+- load_expt_data
 
 Model description:
 ------------------
@@ -92,10 +98,10 @@ to do:
 from scipy.integrate import ode, solve_ivp
 from scipy.interpolate import interp1d
 from scipy.io.matlab import loadmat
-from bent_plume_analyser import (plume_trajectory,
-                                 dist_along_path,
-                                 plume_angle,
-                                 true_location_width)
+from fumarole_plume_model.bent_plume_analyser import (plume_trajectory,
+                                                      dist_along_path,
+                                                      plume_angle,
+                                                      true_location_width)
 
 import numpy as np
 import matplotlib.pyplot as plt
