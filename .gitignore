@@ -50,3 +50,5 @@ bibliography.bib
 synthetic_data/
 archive/
 *.zip
+requirements.txt.*
+*.py*
