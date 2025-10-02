@@ -76,9 +76,9 @@ thexp[0]  = np.pi / 2
 
 # Load initial conditions for a given experiment, run the model for those conditions 
 # and then compare model and experimental data
-pathname = '/home/david/Modelling/fumarole_plume_model/data/'
+pathname = '/home/david/Modelling/fumarolePlumeModel/data/'
 V0, p = loadICsParameters(pathname, exptNo)
-#%run fumarole_plume_model.py
+#%run fumarolePlumeModel.py
 V0[0] *= 2.
 
 # Initialise an integrator object

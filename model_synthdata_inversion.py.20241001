@@ -512,7 +512,7 @@ if __name__ == '__main__':
 
 
         ## Save variables for later
-        save_str = home_str + f'/Modelling/fumarole_plume_model/' + \
+        save_str = home_str + f'/Modelling/fumarolePlumeModel/' + \
             f'objFn_soln_{ndims}D_{ngrid:04d}pts_{ncore:03d}cores'
         if wind:
             save_str += '_wind'
