@@ -48,4 +48,4 @@ from fumarole_plume_model.expt_plume_model import (derivs as expt_derivs,
                                                    wind,
                                                    load_ics_parameters,
                                                    load_expt_data)
-from fumarole_plume_model._version import __version__
+from fumarole_plume_model._version import _version
